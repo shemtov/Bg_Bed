@@ -1,5 +1,5 @@
 /* ============================================================
- *                        TEST  055
+ *                        TEST  061
  * ============================================================
  *  PANEL FIRMWARE  (ESP32-8048S043, ESP32-S3-WROOM-1 N16R8)
  *  Adjustable Bed Massage Retrofit - Revision 4
@@ -22,6 +22,79 @@
  *   044 - null guards on every label update. Fixes the
  *         LoadProhibited reboot at EXCVADDR 0x00000022, which
  *         was a timer touching a label before it was built.
+ *
+ *  NEW IN 061 - IT ACTUALLY DETECTS THE WORD NOW:
+ *   Measured on TEST 060 with three references learned from live
+ *   speech: 10 repeats of the wake word scored 5.91-8.36, six
+ *   other words scored 13.02-23.86. No overlap, 1.56x gap.
+ *   WAKE_THRESHOLD is 10.5 - about 26% clear of both sides.
+ *   Adjust live with `th 9.5`; `dsp` shows the current value.
+ *   A duration gate runs BEFORE the DTW: a word whose length is
+ *   outside 0.5x-1.7x of the learned references is rejected
+ *   without the maths. On the measured data that threw out 4 of
+ *   the 6 non-words and lost none of the 10 true ones.
+ *   FIXED: the microphone was serviced only inside the ST_UI
+ *   branch, so it stopped the moment the screensaver came on -
+ *   exactly when the wake word matters. It now runs in every
+ *   state, and a detection wakes the screen.
+ *
+ *  NEW IN 060 - 059 would not compile:
+ *   the catch-all `else` for unknown commands was placed BEFORE
+ *   `else if (conBuf == "mic")`, so a terminal else sat in the
+ *   middle of the chain. Braces balanced, which is why a brace
+ *   check did not catch it. Moved to the end where it belongs.
+ *   059 is otherwise unchanged; a new number is used so there is
+ *   never a question of which 059 someone has.
+ *
+ *  NEW IN 059 - the console never saw your commands:
+ *   pollSerialCommands acted on '\n' and DISCARDED '\r'. Pressing
+ *   Enter in the PlatformIO monitor sends CR, so `ref` was thrown
+ *   away silently - 20 words captured, no reference ever stored.
+ *   Either terminator now ends a line, and platformio.ini gains
+ *   monitor_filters send_on_enter.
+ *   Also, no serial needed at all any more: a LEARN button on the
+ *   home screen stores the last word. THREE reference slots are
+ *   kept and a word is scored against the closest one, which
+ *   handles normal variation in how you say it far better than a
+ *   single template.
+ *
+ *  NEW IN 058 - MFCC FEATURES + DTW MATCHING:
+ *   TEST 057 measured 8 real words at 560-656 ms, spread 1.17x,
+ *   sd 33 ms. That consistency is what makes templates viable.
+ *   pre-emphasis -> 25 ms Hamming frames / 10 ms hop -> 512-pt FFT
+ *   -> 26 mel filters 300-8000 Hz -> log -> DCT -> 12 coefficients
+ *   -> cepstral mean normalisation. Matching is dynamic time
+ *   warping normalised by path length, so a word said a little
+ *   faster or slower still matches.
+ *   NOTHING ACTS ON A MATCH YET. It prints a distance so the
+ *   threshold comes from real numbers instead of a guess:
+ *     `ref`   store the last word as the reference
+ *     `dsp`   show feature and reference status
+ *   Say the wake word several times, then other words. If the two
+ *   groups separate, the threshold goes between them.
+ *
+ *  NEW IN 057 - PRE-ROLL, so the start of the word is not lost:
+ *   Measured on real speech at TEST 056: 9 words, 304-704 ms,
+ *   mean 516, sd 135. RMS is averaged over a 16 ms buffer and has
+ *   to climb 4x above the noise floor before capture starts, so
+ *   roughly the first 30-60 ms of every word was already gone -
+ *   exactly the part a wake word needs most.
+ *   A 250 ms ring buffer now runs continuously. When speech
+ *   triggers, that recent past is prepended, so the recording
+ *   begins BEFORE the sound that triggered it.
+ *   `mic` now also reports the spread of the last 8 words, which
+ *   is the number that says whether templates are viable.
+ *
+ *  NEW IN 056 - UTTERANCE DETECTION (still no recognition):
+ *   054 proved audio arrives. This finds WORDS in it - start, end,
+ *   duration, peak - and keeps the samples in a 2 s PSRAM buffer.
+ *   Both recognition paths need this: a trained model needs recorded
+ *   samples, template matching needs a clean utterance to compare.
+ *   The threshold is ADAPTIVE. A fixed one works in a silent room
+ *   and fails with a fan running, so a noise floor is tracked while
+ *   nothing is being said and speech must rise well above it.
+ *   Serial commands: `dump` prints the last utterance as base64,
+ *   `mic` prints the current levels and noise floor.
  *
  *  NEW IN 055 - the 1 Hz screensaver flicker:
  *   Every tick repainted all 800x480: dial first, hands after. The
@@ -133,7 +206,7 @@
  *  Board: ESP32-8048S043 | 800x480 ST7262 RGB | GT911 touch
  *  I2C SDA=19 SCL=20 | SD CS=10 MOSI=11 CLK=12 MISO=13 (FAT32)
  *  UART1 to bed box: TX=IO17 RX=IO18 @115200 via P3
- *  TEST_NUMBER 55 - printed at boot AND shown on screen.
+ *  TEST_NUMBER 61 - printed at boot AND shown on screen.
  * ============================================================ */
 
 #include <Arduino.h>
@@ -150,7 +223,7 @@
 #include <lvgl.h>
 #include <Preferences.h>
 
-#define TEST_NUMBER 55
+#define TEST_NUMBER 61
 
 // ---- backlight ----
 #define GFX_BL 2
@@ -172,6 +245,36 @@ float targetDuty = 255, curDuty = 255;
 #define MIC_PORT         I2S_NUM_0
 #define MIC_SAMPLE_RATE  16000
 #define MIC_FRAMES       256      // 32-bit samples per read
+
+// ---- TEST 056: utterance detection ----
+#define UTT_MAX_MS       2000     // longest word we will keep
+#define UTT_MIN_MS       220      // shorter than this is a click, not a word
+#define UTT_HANG_MS      280      // quiet for this long ends the utterance
+#define UTT_MAX_SAMPLES  ((MIC_SAMPLE_RATE / 1000) * UTT_MAX_MS)
+#define UTT_START_MULT   4.0f     // RMS must exceed noiseFloor * this
+#define UTT_STOP_MULT    2.0f     // ...and fall below this to end
+#define UTT_ABS_FLOOR    0.0035f  // absolute minimum, for a truly silent room
+// TEST 057: audio kept before the trigger, so the word's onset survives
+#define PRE_ROLL_MS      250
+#define PRE_ROLL_SAMPLES ((MIC_SAMPLE_RATE / 1000) * PRE_ROLL_MS)
+#define UTT_BUF_SAMPLES  (UTT_MAX_SAMPLES + PRE_ROLL_SAMPLES)
+#define UTT_HISTORY      8        // durations kept for the spread report
+
+// ---- TEST 058: MFCC + DTW ----
+#define MFCC_FRAME       400      // 25 ms at 16 kHz
+#define MFCC_HOP         160      // 10 ms
+#define MFCC_NFFT        512
+#define MFCC_NMEL        26
+#define MFCC_NCEP        12       // c1..c12; c0 (loudness) is deliberately dropped
+#define MFCC_FMIN        300.0f
+#define MFCC_FMAX        8000.0f
+#define MFCC_MAX_FRAMES  240      // 2.4 s of hops, above the 2.25 s capture cap
+
+// ---- TEST 061: detection ----
+#define WAKE_THRESHOLD   10.5f    // chosen from measured data, see the banner
+#define WAKE_DUR_MIN     0.50f    // word length vs the learned average
+#define WAKE_DUR_MAX     1.70f
+#define WAKE_SHOW_MS     2500     // how long the banner stays up
 
 // TEST 053: 0 = the microphone owns GPIO 11/12/13. Set to 1 only when the
 // mic has moved to another board and the SPI pins are free again.
@@ -213,7 +316,46 @@ bool  micReady   = false;
 float micRms     = 0.0f;   // 0..1
 float micPeak    = 0.0f;   // 0..1
 uint32_t micReads = 0;
+size_t   micSamples = 0;          // TEST 056: samples in the last read
 lv_obj_t *micBar = NULL, *micLbl = NULL;
+
+// TEST 056: utterance capture
+int16_t  *uttBuf     = NULL;      // PSRAM, UTT_MAX_SAMPLES int16
+size_t    uttLen     = 0;         // samples held in uttBuf (last complete word)
+size_t    uttFill    = 0;         // samples written while capturing
+bool      uttActive  = false;
+uint32_t  uttStartMs = 0, uttQuietMs = 0;
+size_t    uttFillAtQuiet = 0;     // fill level when the quiet period began
+uint32_t  uttCount   = 0;         // words accepted since boot
+uint32_t  uttLastMs  = 0;         // duration of the last accepted word
+float     uttLastPeak = 0.0f;
+float     micFloor   = 0.01f;     // adaptive noise floor (RMS units)
+lv_obj_t *uttLbl     = NULL;
+// TEST 057: continuous pre-roll ring
+int16_t  *preBuf     = NULL;
+size_t    preHead    = 0;         // next write position
+size_t    preCount   = 0;         // valid samples, saturates at PRE_ROLL_SAMPLES
+uint32_t  uttHist[UTT_HISTORY] = {0};
+uint8_t   uttHistN   = 0;
+
+// TEST 058: DSP working set
+static float fftRe[MFCC_NFFT], fftIm[MFCC_NFFT];
+static float hamWin[MFCC_FRAME];
+static int   melBin[MFCC_NMEL + 2];
+static float dctTab[MFCC_NCEP][MFCC_NMEL];
+static bool  dspReady = false;
+#define REF_SLOTS 3
+float   *mfccCur = NULL;                    // PSRAM: MAX_FRAMES * NCEP
+float   *mfccRefs[REF_SLOTS] = { NULL, NULL, NULL };
+int      refFrames[REF_SLOTS] = { 0, 0, 0 };
+int      curFrames = 0, refNext = 0, refCount = 0;
+uint32_t refMs[REF_SLOTS] = { 0, 0, 0 };    // learned word lengths
+uint32_t lastVoiceMs = 0;
+float    wakeThreshold = WAKE_THRESHOLD;
+uint32_t wakeCount = 0, wakeShownMs = 0;
+lv_obj_t *learnLbl = NULL, *wakeBanner = NULL;
+float   *dtwA = NULL, *dtwB = NULL;         // two rolling DP rows
+float    lastDist = -1.0f;
 
 // TEST 046: the dial is decoded once into PSRAM and reused every tick.
 uint16_t *dialBuf   = NULL;      // 800*480 RGB565 = 768000 bytes
@@ -333,6 +475,8 @@ void setupBacklight();
 void computeTargetFromLux();
 void easeBacklight();
 void sendMsg(uint8_t bed, uint8_t cmd, uint8_t target, uint8_t value);
+void learnReference();
+void clearReferences();
 void buildHome();
 void buildMassage();
 void buildRadio();
@@ -564,6 +708,7 @@ bool micRead() {
   if (err != ESP_OK || got < sizeof(int32_t)) return false;
 
   size_t n = got / sizeof(int32_t);
+  micSamples = n;                 // TEST 056: uttProcess appends exactly this many
   double sumsq = 0.0;
   int32_t peak = 0;
   for (size_t i = 0; i < n; i++) {
@@ -580,6 +725,362 @@ bool micRead() {
   micPeak = (float)peak / 32768.0f;
   micReads++;
   return true;
+}
+
+// ============================================================
+//  TEST 056: find a word in the stream
+//  Called once per captured buffer, after micRead() has filled
+//  micBuf and updated micRms / micPeak.
+// ============================================================
+// ============================================================
+//  TEST 058: MFCC front end
+//  Radix-2 FFT validated against numpy before being written here
+//  (max error 3e-13 on 512 random points).
+// ============================================================
+static void fftRadix2(float *re, float *im, int n) {
+  // bit reversal
+  int j = 0;
+  for (int i = 1; i < n; i++) {
+    int bit = n >> 1;
+    for (; j & bit; bit >>= 1) j ^= bit;
+    j |= bit;
+    if (i < j) {
+      float t = re[i]; re[i] = re[j]; re[j] = t;
+      t = im[i]; im[i] = im[j]; im[j] = t;
+    }
+  }
+  for (int len = 2; len <= n; len <<= 1) {
+    float ang = -2.0f * (float)M_PI / (float)len;
+    float wr = cosf(ang), wi = sinf(ang);
+    for (int i = 0; i < n; i += len) {
+      float cr = 1.0f, ci = 0.0f;
+      for (int k = 0; k < len / 2; k++) {
+        float ur = re[i + k],           ui = im[i + k];
+        float xr = re[i + k + len / 2], xi = im[i + k + len / 2];
+        float vr = xr * cr - xi * ci;
+        float vi = xr * ci + xi * cr;
+        re[i + k] = ur + vr;  im[i + k] = ui + vi;
+        re[i + k + len / 2] = ur - vr;  im[i + k + len / 2] = ui - vi;
+        float ncr = cr * wr - ci * wi;
+        ci = cr * wi + ci * wr;
+        cr = ncr;
+      }
+    }
+  }
+}
+
+static inline float hz2mel(float f) { return 2595.0f * log10f(1.0f + f / 700.0f); }
+static inline float mel2hz(float m) { return 700.0f * (powf(10.0f, m / 2595.0f) - 1.0f); }
+
+void dspInit() {
+  for (int i = 0; i < MFCC_FRAME; i++)
+    hamWin[i] = 0.54f - 0.46f * cosf(2.0f * (float)M_PI * i / (MFCC_FRAME - 1));
+
+  float lo = hz2mel(MFCC_FMIN), hi = hz2mel(MFCC_FMAX);
+  for (int i = 0; i < MFCC_NMEL + 2; i++) {
+    float hz = mel2hz(lo + (hi - lo) * i / (MFCC_NMEL + 1));
+    melBin[i] = (int)floorf((MFCC_NFFT + 1) * hz / (float)MIC_SAMPLE_RATE);
+    if (melBin[i] > MFCC_NFFT / 2) melBin[i] = MFCC_NFFT / 2;
+  }
+
+  for (int c = 0; c < MFCC_NCEP; c++)
+    for (int m = 0; m < MFCC_NMEL; m++)
+      dctTab[c][m] = cosf((float)M_PI * (c + 1) * (m + 0.5f) / MFCC_NMEL);
+
+  size_t fbytes = (size_t)MFCC_MAX_FRAMES * MFCC_NCEP * sizeof(float);
+  mfccCur = (float *)ps_malloc(fbytes);
+  bool refsOk = true;
+  for (int i = 0; i < REF_SLOTS; i++) {
+    mfccRefs[i] = (float *)ps_malloc(fbytes);
+    if (!mfccRefs[i]) refsOk = false;
+  }
+  dtwA = (float *)ps_malloc((size_t)(MFCC_MAX_FRAMES + 1) * sizeof(float));
+  dtwB = (float *)ps_malloc((size_t)(MFCC_MAX_FRAMES + 1) * sizeof(float));
+
+  dspReady = mfccCur && refsOk && dtwA && dtwB;
+  Serial.printf("dsp: %s  (%u bytes of features, %d reference slots)\n",
+                dspReady ? "ready" : "ALLOCATION FAILED",
+                (unsigned)((REF_SLOTS + 1) * fbytes), REF_SLOTS);
+}
+
+// Returns the number of frames written into out[].
+int mfccExtract(const int16_t *sig, size_t len, float *out) {
+  if (!dspReady || len < MFCC_FRAME) return 0;
+
+  int frames = 0;
+  for (size_t start = 0;
+       start + MFCC_FRAME <= len && frames < MFCC_MAX_FRAMES;
+       start += MFCC_HOP) {
+
+    for (int i = 0; i < MFCC_NFFT; i++) { fftRe[i] = 0.0f; fftIm[i] = 0.0f; }
+    // pre-emphasis inside the window, then Hamming
+    for (int i = 0; i < MFCC_FRAME; i++) {
+      size_t k = start + i;
+      float prev = (k > 0) ? (float)sig[k - 1] : 0.0f;
+      fftRe[i] = ((float)sig[k] - 0.97f * prev) * hamWin[i];
+    }
+    fftRadix2(fftRe, fftIm, MFCC_NFFT);
+
+    float *dst = out + (size_t)frames * MFCC_NCEP;
+    float mel[MFCC_NMEL];
+    for (int m = 1; m <= MFCC_NMEL; m++) {
+      int l = melBin[m - 1], c = melBin[m], r = melBin[m + 1];
+      float s = 0.0f;
+      for (int k = l; k < c; k++) {
+        float p = (fftRe[k] * fftRe[k] + fftIm[k] * fftIm[k]) / MFCC_NFFT;
+        if (c > l) s += p * (float)(k - l) / (float)(c - l);
+      }
+      for (int k = c; k < r; k++) {
+        float p = (fftRe[k] * fftRe[k] + fftIm[k] * fftIm[k]) / MFCC_NFFT;
+        if (r > c) s += p * (float)(r - k) / (float)(r - c);
+      }
+      mel[m - 1] = logf(s + 1e-10f);
+    }
+    for (int c = 0; c < MFCC_NCEP; c++) {
+      float acc = 0.0f;
+      for (int m = 0; m < MFCC_NMEL; m++) acc += dctTab[c][m] * mel[m];
+      dst[c] = acc;
+    }
+    frames++;
+  }
+
+  // cepstral mean normalisation: removes the constant colour of the
+  // microphone and the room, and most of the effect of loudness
+  for (int c = 0; c < MFCC_NCEP; c++) {
+    float mean = 0.0f;
+    for (int f = 0; f < frames; f++) mean += out[(size_t)f * MFCC_NCEP + c];
+    mean /= (float)frames;
+    for (int f = 0; f < frames; f++) out[(size_t)f * MFCC_NCEP + c] -= mean;
+  }
+  return frames;
+}
+
+// Dynamic time warping, normalised by path length so long and short
+// words are comparable.
+float dtwDistance(const float *A, int n, const float *B, int m) {
+  if (!dspReady || n < 2 || m < 2) return -1.0f;
+  const float INF = 3.4e38f;
+  float *prev = dtwA, *cur = dtwB;
+  for (int j = 0; j <= m; j++) prev[j] = INF;
+  prev[0] = 0.0f;
+
+  for (int i = 1; i <= n; i++) {
+    cur[0] = INF;
+    const float *a = A + (size_t)(i - 1) * MFCC_NCEP;
+    for (int j = 1; j <= m; j++) {
+      const float *b = B + (size_t)(j - 1) * MFCC_NCEP;
+      float d = 0.0f;
+      for (int c = 0; c < MFCC_NCEP; c++) { float e = a[c] - b[c]; d += e * e; }
+      d = sqrtf(d);
+      float best = prev[j];
+      if (cur[j - 1] < best) best = cur[j - 1];
+      if (prev[j - 1] < best) best = prev[j - 1];
+      cur[j] = d + best;
+    }
+    float *t = prev; prev = cur; cur = t;
+  }
+  return prev[m] / (float)(n + m);
+}
+
+// TEST 059: store the last word as a reference. Slots cycle, so pressing
+// Learn four times keeps the three most recent.
+void learnReference() {
+  if (!dspReady || curFrames <= 0) {
+    Serial.println("learn: say the word first");
+    return;
+  }
+  memcpy(mfccRefs[refNext], mfccCur, (size_t)curFrames * MFCC_NCEP * sizeof(float));
+  refFrames[refNext] = curFrames;
+  refMs[refNext]     = lastVoiceMs;
+  refNext = (refNext + 1) % REF_SLOTS;
+  if (refCount < REF_SLOTS) refCount++;
+  Serial.printf("learn: stored %d frames (%u ms), %d/%d slots filled\n",
+                curFrames, (unsigned)lastVoiceMs, refCount, REF_SLOTS);
+  if (learnLbl) lv_label_set_text_fmt(learnLbl, "Learn %d/%d", refCount, REF_SLOTS);
+}
+
+void clearReferences() {
+  for (int i = 0; i < REF_SLOTS; i++) { refFrames[i] = 0; refMs[i] = 0; }
+  refNext = 0; refCount = 0;
+  Serial.println("learn: references cleared");
+  if (learnLbl) lv_label_set_text_fmt(learnLbl, "Learn 0/%d", REF_SLOTS);
+}
+
+void uttProcess() {
+  if (!uttBuf || !preBuf) return;
+
+  const uint32_t now = millis();
+  const float startTh = fmaxf(micFloor * UTT_START_MULT, UTT_ABS_FLOOR);
+  const float stopTh  = fmaxf(micFloor * UTT_STOP_MULT,  UTT_ABS_FLOOR * 0.7f);
+
+  // ---- TEST 057: the ring runs ALWAYS, speaking or not ----
+  for (size_t i = 0; i < micSamples; i++) {
+    int32_t s = micBuf[i] >> 14;
+    if (s >  32767) s =  32767;
+    if (s < -32768) s = -32768;
+    preBuf[preHead] = (int16_t)s;
+    preHead = (preHead + 1) % PRE_ROLL_SAMPLES;
+    if (preCount < PRE_ROLL_SAMPLES) preCount++;
+  }
+
+  if (!uttActive) {
+    micFloor = micFloor * 0.98f + micRms * 0.02f;   // track the room while quiet
+    if (micRms <= startTh) return;
+
+    // Speech. Start the recording with the pre-roll, oldest sample first.
+    uttActive   = true;
+    uttStartMs  = now;
+    uttQuietMs  = 0;
+    uttFillAtQuiet = 0;
+    uttLastPeak = micPeak;
+    uttFill     = 0;
+
+    size_t start = (preHead + PRE_ROLL_SAMPLES - preCount) % PRE_ROLL_SAMPLES;
+    for (size_t i = 0; i < preCount && uttFill < UTT_BUF_SAMPLES; i++) {
+      uttBuf[uttFill++] = preBuf[(start + i) % PRE_ROLL_SAMPLES];
+    }
+    // the pre-roll already contains this buffer's samples - do not add them twice
+  } else {
+    for (size_t i = 0; i < micSamples && uttFill < UTT_BUF_SAMPLES; i++) {
+      int32_t s = micBuf[i] >> 14;
+      if (s >  32767) s =  32767;
+      if (s < -32768) s = -32768;
+      uttBuf[uttFill++] = (int16_t)s;
+    }
+    if (micPeak > uttLastPeak) uttLastPeak = micPeak;
+  }
+
+  bool tooLong = (uttFill >= UTT_BUF_SAMPLES) || ((now - uttStartMs) > UTT_MAX_MS);
+
+  if (micRms < stopTh) {
+    if (uttQuietMs == 0) { uttQuietMs = now; uttFillAtQuiet = uttFill; }
+  } else {
+    uttQuietMs = 0;
+  }
+  bool ended = (uttQuietMs && (now - uttQuietMs) >= UTT_HANG_MS);
+
+  if (!ended && !tooLong) return;
+
+  uttActive = false;
+  // trim the hang time, but never below the pre-roll we deliberately kept
+  if (ended && uttFillAtQuiet > PRE_ROLL_SAMPLES && uttFillAtQuiet < uttFill)
+    uttFill = uttFillAtQuiet;
+
+  uint32_t totalMs = (uint32_t)((uint64_t)uttFill * 1000ULL / MIC_SAMPLE_RATE);
+  uint32_t voiceMs = (totalMs > PRE_ROLL_MS) ? (totalMs - PRE_ROLL_MS) : 0;
+
+  if (voiceMs < UTT_MIN_MS) {
+    Serial.printf("utt: rejected, %u ms of voice is too short\n", (unsigned)voiceMs);
+    return;
+  }
+
+  uttLen    = uttFill;
+  uttLastMs = totalMs;
+  uttCount++;
+  uttHist[uttHistN % UTT_HISTORY] = voiceMs;
+  uttHistN++;
+
+  Serial.printf("utt #%u: voice %u ms (+%d pre-roll = %u total), %u samples, "
+                "peak %.3f, floor %.4f%s\n",
+                (unsigned)uttCount, (unsigned)voiceMs, PRE_ROLL_MS,
+                (unsigned)totalMs, (unsigned)uttLen, uttLastPeak, micFloor,
+                tooLong ? "  (hit the limit)" : "");
+  lastVoiceMs = voiceMs;
+
+  // ---- TEST 058: features, and a distance if a reference exists ----
+  uint32_t t0 = millis();
+  curFrames = mfccExtract(uttBuf, uttLen, mfccCur);
+  uint32_t tMfcc = millis() - t0;
+  lastDist = -1.0f;
+
+  // TEST 061: duration gate. Cheaper than DTW and it removes the
+  // obviously-wrong lengths - sentences, coughs - before the maths.
+  bool durOk = true;
+  if (refCount > 0) {
+    uint32_t sum = 0; int n = 0;
+    for (int i = 0; i < REF_SLOTS; i++) if (refMs[i]) { sum += refMs[i]; n++; }
+    if (n > 0) {
+      float ratio = (float)voiceMs / ((float)sum / (float)n);
+      if (ratio < WAKE_DUR_MIN || ratio > WAKE_DUR_MAX) {
+        durOk = false;
+        Serial.printf("     mfcc %d frames (%u ms), length %.2fx of learned - "
+                      "rejected before DTW\n",
+                      curFrames, (unsigned)tMfcc, ratio);
+      }
+    }
+  }
+
+  if (curFrames > 0 && refCount > 0 && durOk) {
+    t0 = millis();
+    float best = -1.0f; int bestSlot = -1;
+    char per[80]; int off = 0;
+    for (int i = 0; i < REF_SLOTS; i++) {
+      if (refFrames[i] <= 0) continue;
+      float d = dtwDistance(mfccCur, curFrames, mfccRefs[i], refFrames[i]);
+      if (d >= 0.0f && (best < 0.0f || d < best)) { best = d; bestSlot = i; }
+      if (off < (int)sizeof(per) - 12)
+        off += snprintf(per + off, sizeof(per) - off, " %.2f", d);
+    }
+    lastDist = best;
+    bool hit = (best >= 0.0f && best < wakeThreshold);
+    Serial.printf("     mfcc %d frames (%u ms), dtw%s -> best %.3f (slot %d, %u ms)  %s\n",
+                  curFrames, (unsigned)tMfcc, per, best, bestSlot,
+                  (unsigned)(millis() - t0),
+                  hit ? "*** WAKE WORD ***" : "(no match)");
+    if (hit) {
+      wakeCount++;
+      Serial.printf("WAKE #%u  distance %.3f  threshold %.2f\n",
+                    (unsigned)wakeCount, best, wakeThreshold);
+      wakeShownMs = millis();
+      if (wakeBanner) lv_obj_clear_flag(wakeBanner, LV_OBJ_FLAG_HIDDEN);
+      if (state == ST_SAVER) exitSaver();     // wake the screen
+    }
+  } else if (!durOk) {
+    /* already reported */
+  } else {
+    Serial.printf("     mfcc %d frames (%u ms), no reference yet - press Learn\n",
+                  curFrames, (unsigned)tMfcc);
+  }
+
+  if (uttLbl) {
+    if (lastDist >= 0.0f)
+      lv_label_set_text_fmt(uttLbl, "word #%u  %u ms   d=%d.%02d",
+                            (unsigned)uttCount, (unsigned)voiceMs,
+                            (int)lastDist, (int)((lastDist - (int)lastDist) * 100));
+    else
+      lv_label_set_text_fmt(uttLbl, "word #%u  %u ms", (unsigned)uttCount,
+                            (unsigned)voiceMs);
+  }
+}
+
+// Print the last utterance as base64 so it can be copied off the board.
+void uttDump() {
+  if (!uttBuf || uttLen == 0) { Serial.println("utt: nothing captured yet"); return; }
+
+  static const char *B64 =
+      "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+  const uint8_t *p = (const uint8_t *)uttBuf;
+  size_t bytes = uttLen * sizeof(int16_t);
+
+  Serial.printf("utt-dump begin  samples=%u  rate=%d  bits=16  le=1\n",
+                (unsigned)uttLen, MIC_SAMPLE_RATE);
+  size_t i = 0, col = 0;
+  while (i < bytes) {
+    uint32_t v = (uint32_t)p[i] << 16;
+    int have = 1;
+    if (i + 1 < bytes) { v |= (uint32_t)p[i+1] << 8; have = 2; }
+    if (i + 2 < bytes) { v |= (uint32_t)p[i+2];      have = 3; }
+    char q[4];
+    q[0] = B64[(v >> 18) & 0x3F];
+    q[1] = B64[(v >> 12) & 0x3F];
+    q[2] = (have > 1) ? B64[(v >> 6) & 0x3F] : '=';
+    q[3] = (have > 2) ? B64[v & 0x3F]        : '=';
+    Serial.write(q, 4);
+    i += 3;
+    if ((col += 4) >= 76) { Serial.println(); col = 0; }
+  }
+  if (col) Serial.println();
+  Serial.println("utt-dump end");
 }
 
 void scanPhotos() {
@@ -921,6 +1422,34 @@ void buildHome() {
   lv_obj_set_style_text_font(micLbl, &lv_font_montserrat_20, 0);
   lv_obj_set_style_text_color(micLbl, lv_color_hex(0x90C0E0), 0);
   lv_obj_align(micLbl, LV_ALIGN_BOTTOM_LEFT, 20, -12);
+
+  uttLbl = lv_label_create(scrHome);
+  lv_label_set_text(uttLbl, "no word yet");
+  lv_obj_set_style_text_font(uttLbl, &lv_font_montserrat_20, 0);
+  lv_obj_set_style_text_color(uttLbl, lv_color_hex(0x8FE0A0), 0);
+  lv_obj_align(uttLbl, LV_ALIGN_BOTTOM_LEFT, 20, -44);
+
+  // TEST 059: Learn button - no serial monitor needed
+  lv_obj_t *learnBtn = lv_btn_create(scrHome);
+  lv_obj_set_size(learnBtn, 160, 44);
+  lv_obj_align(learnBtn, LV_ALIGN_BOTTOM_RIGHT, -20, -44);
+  lv_obj_set_style_bg_color(learnBtn, lv_color_hex(0x2E6F4E), 0);
+  lv_obj_add_event_cb(learnBtn, [](lv_event_t *e){ learnReference(); },
+                      LV_EVENT_CLICKED, NULL);
+  lv_obj_add_event_cb(learnBtn, [](lv_event_t *e){ clearReferences(); },
+                      LV_EVENT_LONG_PRESSED, NULL);
+  learnLbl = lv_label_create(learnBtn);
+  lv_label_set_text_fmt(learnLbl, "Learn 0/%d", REF_SLOTS);
+  lv_obj_set_style_text_font(learnLbl, &lv_font_montserrat_20, 0);
+  lv_obj_center(learnLbl);
+
+  // TEST 061: shown briefly when the wake word is recognised
+  wakeBanner = lv_label_create(scrHome);
+  lv_label_set_text(wakeBanner, "WAKE WORD");
+  lv_obj_set_style_text_font(wakeBanner, &lv_font_montserrat_40, 0);
+  lv_obj_set_style_text_color(wakeBanner, lv_color_hex(0x40E080), 0);
+  lv_obj_align(wakeBanner, LV_ALIGN_CENTER, 0, 0);
+  lv_obj_add_flag(wakeBanner, LV_OBJ_FLAG_HIDDEN);
 
   micBar = lv_bar_create(scrHome);
   lv_obj_set_size(micBar, 560, 22);
@@ -1899,9 +2428,12 @@ String conBuf;
 void pollSerialCommands(){
   while (Serial.available()){
     char c = Serial.read();
-    if (c=='\n'){
+    // TEST 059: CR *or* LF ends a line. Only '\n' was accepted before,
+    // and the PlatformIO monitor sends CR - which is why `ref` never ran.
+    if (c=='\n' || c=='\r'){
       conBuf.trim();
-      if (conBuf.startsWith("time ")){
+      if (conBuf.length()==0){ /* bare CRLF, nothing typed */ }
+      else if (conBuf.startsWith("time ")){
         int hh, mm;
         if (sscanf(conBuf.c_str()+5, "%d:%d", &hh, &mm)==2 && hh>=0 && hh<24 && mm>=0 && mm<60){
           baseSecOfDay = (long)hh*3600 + (long)mm*60;
@@ -1912,8 +2444,50 @@ void pollSerialCommands(){
           if (state == ST_SAVER) drawDiverClock(true);
         } else Serial.println("usage: time HH:MM");
       }
+      else if (conBuf == "dump") uttDump();
+      else if (conBuf.startsWith("th ")) {
+        float v = atof(conBuf.c_str() + 3);
+        if (v > 0.5f && v < 100.0f) {
+          wakeThreshold = v;
+          Serial.printf("threshold set to %.2f\n", wakeThreshold);
+        } else Serial.println("usage: th 10.5");
+      }
+      else if (conBuf == "ref")      learnReference();
+      else if (conBuf == "refclear") clearReferences();
+      else if (conBuf == "dsp") {
+        Serial.printf("dsp: %s  last word %d frames, %d/%d references (",
+                      dspReady ? "ready" : "not ready", curFrames, refCount, REF_SLOTS);
+        for (int i = 0; i < REF_SLOTS; i++) Serial.printf(" %d", refFrames[i]);
+        for (int i = 0; i < REF_SLOTS; i++) Serial.printf(" %ums", (unsigned)refMs[i]);
+        Serial.printf(" ), last dtw %.3f, threshold %.2f, wakes %u\n",
+                      lastDist, wakeThreshold, (unsigned)wakeCount);
+      }
+      else if (conBuf == "mic") {
+        Serial.printf("mic: rms %.4f  peak %.4f  floor %.4f  start %.4f  words %u\n",
+                      micRms, micPeak, micFloor,
+                      fmaxf(micFloor * UTT_START_MULT, UTT_ABS_FLOOR),
+                      (unsigned)uttCount);
+        // TEST 057: spread of the recent words - the number that decides
+        // whether template matching is worth trying
+        uint8_t n = (uttHistN < UTT_HISTORY) ? uttHistN : UTT_HISTORY;
+        if (n >= 2) {
+          uint32_t lo = 0xFFFFFFFF, hi = 0, sum = 0;
+          for (uint8_t i = 0; i < n; i++) {
+            uint32_t v = uttHist[i];
+            if (v < lo) lo = v;
+            if (v > hi) hi = v;
+            sum += v;
+          }
+          Serial.printf("     last %u words: min %u  max %u  mean %u ms  spread %.2fx\n",
+                        n, (unsigned)lo, (unsigned)hi, (unsigned)(sum / n),
+                        lo ? (float)hi / (float)lo : 0.0f);
+        }
+      }
+      else Serial.printf("unknown command '%s' - try: "
+                         "time HH:MM, mic, dsp, ref, refclear, dump\n",
+                         conBuf.c_str());
       conBuf = "";
-    } else if (c!='\r') conBuf += c;
+    } else conBuf += c;
   }
 }
 
@@ -1962,6 +2536,17 @@ void setup() {
 #endif
   cacheDial();                       // TEST 046: decode once, reuse forever
   micBegin();                        // TEST 054: microphone
+
+  dspInit();                         // TEST 058: MFCC tables + buffers
+
+  // TEST 056: utterance buffer, 2 s at 16 kHz
+  uttBuf = (int16_t *)ps_malloc((size_t)UTT_BUF_SAMPLES * sizeof(int16_t));
+  preBuf = (int16_t *)ps_malloc((size_t)PRE_ROLL_SAMPLES * sizeof(int16_t));
+  Serial.printf("utt buffer: %s (%u bytes)  pre-roll: %s (%u bytes)\n",
+                uttBuf ? "ok" : "FAILED",
+                (unsigned)((size_t)UTT_BUF_SAMPLES * sizeof(int16_t)),
+                preBuf ? "ok" : "FAILED",
+                (unsigned)((size_t)PRE_ROLL_SAMPLES * sizeof(int16_t)));
 
   // TEST 055: off-screen compose buffer for a flicker-free screensaver
   clockBuf = (uint16_t *)ps_malloc((size_t)CLK_REG_W * CLK_REG_H * sizeof(uint16_t));
@@ -2019,6 +2604,11 @@ void setup() {
 
 void loop() {
   pollSerialCommands();
+
+  // TEST 061: the microphone runs in EVERY state. It used to live inside
+  // the ST_UI branch, so it stopped the moment the screensaver came on.
+  if (micRead()) uttProcess();
+
   if (state == ST_UI) {
     lv_timer_handler();
 
@@ -2034,8 +2624,13 @@ void loop() {
                       micRms, micPeak, (unsigned)micReads);
     }
 
-    // TEST 054: pull audio every pass and show the level
-    if (micRead() && micBar) {
+    // hide the wake banner after a moment
+    if (wakeShownMs && (millis() - wakeShownMs) > WAKE_SHOW_MS) {
+      wakeShownMs = 0;
+      if (wakeBanner) lv_obj_add_flag(wakeBanner, LV_OBJ_FLAG_HIDDEN);
+    }
+
+    if (micBar) {
       int pct = (int)(micRms * 400.0f);        // x4 so speech is visible
       if (pct > 100) pct = 100;
       lv_bar_set_value(micBar, pct, LV_ANIM_OFF);
@@ -2100,7 +2695,7 @@ void loop() {
 }
 
 /* ============================================================
- *                        TEST  055   (end of file)
+ *                        TEST  061   (end of file)
  * ============================================================
  *  Panel - Stage 3 - rebuild of the lost 041-044 on top of 040
  *
