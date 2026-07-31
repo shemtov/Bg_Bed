@@ -1,6 +1,0 @@
-Put your TEST 0009 bed box code here, named main.cpp
-
-It was never uploaded to the chat, so it only exists on your PC.
-Search Windows for: bedbox_test0009
-
-When you find it: copy it into this folder and rename it to main.cpp

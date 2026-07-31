@@ -1,113 +1,37 @@
 /* ============================================================
- *                        TEST  041
+ *                        TEST  045
  * ============================================================
  *  PANEL FIRMWARE  (ESP32-8048S043, ESP32-S3-WROOM-1 N16R8)
- *  Adjustable Bed Massage Retrofit — Revision 4
- *  Stage 3: THE REAL LVGL UI — home + massage + RADIO screens
+ *  Adjustable Bed Massage Retrofit - Revision 4
+ *  Stage 3: LVGL UI - home + massage + settings + screensaver
  * ------------------------------------------------------------
- *  NEW vs TEST 040:
- *   - RADIO SCREEN, replacing the placeholder. Eight station
- *     tiles in genre colours, a now-playing bar with a colour
- *     stripe, volume 0-21, Sleep 30 and Stop. Tapping a tile
- *     sends the STATION INDEX (not a URL) over the same UART
- *     that reaches the bed boxes; the audio node listens on
- *     address 9 and owns the actual stream URLs, so the radio
- *     keeps playing while the panel screen is dark.
- *   - Protocol extended, still 4 bytes {id, cmd, target, value}:
- *       6 RADIO_PLAY  (target = station 0..7, value = volume)
- *       7 RADIO_STOP
- *       8 RADIO_VOL   (value = 0..21)
- *       9 RADIO_SLEEP (value = minutes)
- *     AUDIO_NODE_ID 9 is used in the bed/id byte, so bed boxes
- *     (1, 2) and 'both' (0) are untouched.
- *   - FIX: on the massage screen the "MASSAGE" title was drawn
- *     underneath the Shemi bed button (title at TOP_MID -60
- *     overlapped the button spanning x=245..420). Title moved
- *     to TOP_LEFT so both are readable.
- *   - Station names/colours live in STATION_NAME/STATION_COL at
- *     the top of this file. The audio node's URL list MUST be in
- *     the same order — index is the only thing sent over UART.
- *  From TEST 040:
- *   - Fix file-preview leftover: on returning from a full-screen
- *     photo preview, clear the whole screen and force a COMPLETE
- *     LVGL repaint (was leaving bits of the photo showing through).
- *   - Bigger Clock rollers (montserrat_40) so the set-time digits
- *     are large and easy to read.
- *  From TEST 027:
- *  NEW vs TEST 026:
- *   - Fix: forward-declare the clock globals/functions so the
- *     Settings code (which appears earlier in the file) can use
- *     them. TEST 026 failed to compile: 'baseSecOfDay',
- *     'nowSecOfDay', 'ds3231SetHM' not declared in scope.
- *  From TEST 026:
- *  NEW vs TEST 025:
- *   - SETTINGS panel (gear icon, top-right of home). Tabs:
- *       Clock   : set time on-screen (hour/min rollers) -> writes
- *                 DS3231 if present. No serial cable needed.
- *       Display : brightness floor slider + screensaver timeout.
- *       Massage : motor thresholds (small/big) + Random character.
- *       Files   : SD-card browser; tap a photo to preview full
- *                 screen (tap to return). Videos are listed but
- *                 can't be played (ESP32 has no video decoder).
- *       About   : test #, sensors, RTC status.
- *     All settings saved to flash (Preferences) - survive power-off.
- *  From TEST 025:
- *  NEW vs TEST 024:
- *   - DS3231 real-time-clock support (I2C 0x68). If the module
- *     is present the clock reads accurate battery-backed time
- *     that survives power cuts. If absent, falls back to the
- *     manual serial time ('time HH:MM'). Set the DS3231 once
- *     with the same 'time HH:MM' command; it writes it into the
- *     module and remembers forever.
- *   - Clock screensaver now shows real time when DS3231 present.
- *  From TEST 024:
- *  NEW vs TEST 023:
- *   - HOME redesign: "Ben Panel" title; big COLORED ICON tiles
- *     (Massage / Radio / AC); top-right shows TEMPERATURE with
- *     PRESSURE TREND arrow (up/down/steady) beside it; lux hidden
- *     (auto-brightness still runs silently).
- *   - Bed selector: big colored NAME buttons - Shemi (blue),
- *     Ira (red), Both (green); no numbers.
- *   (Hebrew title deferred: needs a custom Hebrew font.)
- *  From TEST 023:
- *  NEW vs TEST 022:
- *   - RANDOM preset (4th button): picks a random zone + random
- *     intensity every ~2.5 s, animates that slider as a live
- *     preview, and sends the ZONE message. OFF or another preset
- *     stops it.
- *   - RADIO and AC tiles now open simple placeholder screens
- *     (feature stages come later) instead of doing nothing.
- *  From TEST 022:
- *  NEW vs TEST 021:
- *   CLOCK SCREENSAVER replaces the photo screensaver:
- *    - Big 7-segment digits HH:MM (~3.6 cm tall, screen-wide),
- *      blinking colon, temperature small in the top-right corner.
- *    - Time source: type   time 14:35   in the Serial Monitor
- *      (once per power-up; ESP32 keeps counting). Until set, the
- *      clock shows --:--. Later the audio node will supply NTP
- *      time over UART (RF-free-headboard rule stays pure).
- *   Welcome photo at boot stays. Photos in /photos are no longer
- *   used by the saver.
- *  From TEST 021 (kept):
- *   LVGL 8.3 user interface:
- *    - HOME screen: big clock-style sensor strip (temp, pressure,
- *      light) + tiles: MASSAGE / RADIO / AC (Radio & AC are
- *      placeholders for later stages).
- *    - MASSAGE screen: bed selector (Bed 1 / Bed 2 / Both),
- *      four zone sliders (Head, Shoulders, Back, Legs, 0-100%),
- *      presets (Wave / Pulse / Ripple), timer (15/30/60 min),
- *      big OFF, and Back.
- *    - Every control sends the REAL 4-byte protocol message
- *      {bedId, cmd, target, value} out UART1 (TX=IO17, RX=IO18)
- *      at 115200 — the same header P3 pins — AND logs it to the
- *      serial monitor so you can verify before the bed box is
- *      even connected.
- *   Kept: welcome photo, /photos screensaver (5 min idle,
- *   touch exits), BH1750 auto-brightness (floor 85%),
- *   BMP/BME280 temp/press/(hum).
+ *  WHAT THIS BUILD IS
+ *  TEST 041-044 were lost (no copy on disk, Drive or chat).
+ *  TEST 045 rebuilds those four steps on top of TEST 040,
+ *  which was itself a FAILED minute-roller attempt. The broken
+ *  rollers are gone. A new number was used instead of 044 so a
+ *  reconstruction is never mistaken for the original.
+ *
+ *  REBUILT FROM 040:
+ *   041 - memory-safe photos: 600 KB size guard, PSRAM buffer
+ *         with heap fallback, always freed. No freeze at 38+.
+ *       - Files tab slideshow, 2 s per photo, touch to stop.
+ *   042 - time picker rebuilt as +/- buttons (rollers never
+ *         worked), 12-hour display with AM/PM everywhere.
+ *   043 - clock hands dimmed to about 70 percent.
+ *   044 - null guards on every label update. Fixes the
+ *         LoadProhibited reboot at EXCVADDR 0x00000022, which
+ *         was a timer touching a label before it was built.
+ *
+ *  NOT TESTED ON HARDWARE. TEST 040 ran; 041-044 were tested by
+ *  Shemi but their source is gone, so the code below is written
+ *  from the change descriptions, not recovered. Flash it and
+ *  watch the serial monitor.
  * ------------------------------------------------------------
- *  platformio.ini: v4 REQUIRED (adds lvgl 8.3). Paste BOTH files.
- *  TEST_NUMBER 21 — printed at boot AND shown on screen.
+ *  Board: ESP32-8048S043 | 800x480 ST7262 RGB | GT911 touch
+ *  I2C SDA=19 SCL=20 | SD CS=10 MOSI=11 CLK=12 MISO=13 (FAT32)
+ *  UART1 to bed box: TX=IO17 RX=IO18 @115200 via P3
+ *  TEST_NUMBER 45 - printed at boot AND shown on screen.
  * ============================================================ */
 
 #include <Arduino.h>
@@ -120,7 +44,7 @@
 #include <lvgl.h>
 #include <Preferences.h>
 
-#define TEST_NUMBER 41
+#define TEST_NUMBER 45
 
 // ---- backlight ----
 #define GFX_BL 2
@@ -148,29 +72,8 @@ uint32_t saverTimeoutMs = 300000UL;   // settings-adjustable
 #define BB_TX 17
 #define BB_RX 18
 enum Cmd { CMD_OFF = 0, CMD_ALL = 1, CMD_ZONE = 2,
-           CMD_MOTOR = 3, CMD_PRESET = 4, CMD_TIMER = 5,
-           CMD_RADIO_PLAY = 6, CMD_RADIO_STOP = 7,
-           CMD_RADIO_VOL = 8, CMD_RADIO_SLEEP = 9 };
+           CMD_MOTOR = 3, CMD_PRESET = 4, CMD_TIMER = 5 };
 uint8_t curBedId = 1;        // 1=bed1 2=bed2 0=both
-
-// ---- audio node ----
-// Shares the bed-box UART. The id byte addresses it, so the bed
-// boxes ignore radio traffic and the node ignores massage traffic.
-#define AUDIO_NODE_ID    9
-#define RADIO_SLEEP_MIN  30
-#define RADIO_VOL_MAX    21
-#define NUM_STATIONS     8
-
-// Index is the ONLY thing sent over the wire. The audio node holds
-// the matching stream URLs in the same order - keep them in step.
-const char *STATION_NAME[NUM_STATIONS] = {
-  "Galgalatz",  "Kan Gimel",  "Eco 99",     "Kan 88",
-  "102 FM",     "Kol Hamusica","SomaFM",    "Jazz24"
-};
-const uint32_t STATION_COL[NUM_STATIONS] = {
-  0x2e8a5c, 0x2c58a8, 0xb5483a, 0xb07818,
-  0x5f6673, 0x7a5bb5, 0xa04f7e, 0x1d7a94
-};
 bool randomActive = false;
 uint32_t lastRandomMs = 0;
 
@@ -209,6 +112,12 @@ uint32_t lastTouchMs = 0, photoShownMs = 0, lastSensorMs = 0, lastEaseMs = 0;
 char photoList[MAX_PHOTOS][64];
 int photoCount = 0, lastPhotoIdx = -1;
 
+// TEST 041: Files-tab slideshow. Runs inside ST_PREVIEW; a touch stops it.
+bool     slideOn     = false;
+int      slideIdx    = 0;
+uint32_t slideNextMs = 0;
+#define  SLIDE_MS 2000
+
 // ---- sensors ----
 float gLux = 0, gTemp = 0, gHum = -1, gPress = 0;
 float pressRef = 0;            // reference for trend (updated slowly)
@@ -225,10 +134,13 @@ int32_t t_fine;
 // ---- LVGL ----
 static lv_disp_draw_buf_t draw_buf;
 static lv_color_t *lvbuf1;
-lv_obj_t *scrHome, *scrMassage, *scrRadio, *scrAC, *scrSettings, *scrBlank, *scrClock;
-lv_obj_t *clkGlow, *clkMain, *clkColon, *clkTemp;
+// TEST 044: every display pointer starts NULL so the guards below can work.
+lv_obj_t *scrHome=NULL, *scrMassage=NULL, *scrRadio=NULL, *scrAC=NULL,
+         *scrSettings=NULL, *scrBlank=NULL, *scrClock=NULL;
+lv_obj_t *clkGlow=NULL, *clkMain=NULL, *clkColon=NULL, *clkTemp=NULL;
 // analog clock
-lv_obj_t *anaScr, *anaFace, *anaHour, *anaMin, *anaSec, *anaTemp, *anaCenter;
+lv_obj_t *anaScr=NULL, *anaFace=NULL, *anaHour=NULL, *anaMin=NULL,
+         *anaSec=NULL, *anaTemp=NULL, *anaCenter=NULL;
 lv_point_t hourPts[2], minPts[2], secPts[2];
 lv_style_t stHour, stMin, stSec;
 Preferences prefs;
@@ -239,7 +151,7 @@ int randomChar = 1;                      // 0 gentle 1 lively 2 wild
 char browseList[MAX_BROWSE][80];
 int browseCount = 0;
 char previewPath[96];
-lv_obj_t *lblSensors, *lblTestNum;
+lv_obj_t *lblSensors=NULL, *lblTestNum=NULL;
 lv_obj_t *sliderZone[4], *lblZoneVal[4];
 const char *ZONE_NAME[4] = {"Head", "Shoulders", "Back", "Legs"};
 
@@ -269,6 +181,7 @@ void buildSettings();
 void loadSettings();
 void saveSettings();
 void populateFiles(lv_obj_t *list);
+static void evSlideshow(lv_event_t *e);   // TEST 041
 void buildClock();
 void updateClockFace();
 void buildAnalog();
@@ -323,20 +236,40 @@ int jpegDrawCb(JPEGDRAW *p) {
   gfx->draw16bitRGBBitmap(p->x, p->y, p->pPixels, p->iWidth, p->iHeight);
   return 1;
 }
+// TEST 041: memory-safe. A too-big file or a failed allocation used to
+// leave the panel frozen once many photos had been opened. Now the size is
+// checked first, PSRAM is tried then ordinary heap, and the buffer is always
+// freed on every exit path.
+#define MAX_JPG_BYTES 600000UL
+
 bool showPhoto(const char *path) {
   File f = SD.open(path, FILE_READ);
-  if (!f) return false;
+  if (!f) { Serial.printf("photo: cannot open %s\n", path); return false; }
   size_t sz = f.size();
-  uint8_t *buf = (uint8_t *)ps_malloc(sz);
-  if (!buf) { f.close(); return false; }
-  f.read(buf, sz); f.close();
+  if (sz == 0 || sz > MAX_JPG_BYTES) {
+    Serial.printf("photo: %s is %u bytes - skipped (limit %lu)\n",
+                  path, (unsigned)sz, MAX_JPG_BYTES);
+    f.close();
+    return false;
+  }
+  uint8_t *buf = (uint8_t *)ps_malloc(sz);        // PSRAM first
+  if (!buf) buf = (uint8_t *)malloc(sz);          // then ordinary heap
+  if (!buf) {
+    Serial.printf("photo: no memory for %u bytes (free heap %u)\n",
+                  (unsigned)sz, (unsigned)ESP.getFreeHeap());
+    f.close();
+    return false;
+  }
+  size_t got = f.read(buf, sz);
+  f.close();
   bool ok = false;
-  if (jpeg.openRAM(buf, sz, jpegDrawCb)) {
+  if (got == sz && jpeg.openRAM(buf, sz, jpegDrawCb)) {
     jpeg.setPixelType(RGB565_LITTLE_ENDIAN);
     ok = jpeg.decode(0, 0, 0);
     jpeg.close();
   }
-  free(buf);
+  free(buf);                                      // always freed
+  buf = NULL;
   return ok;
 }
 void scanPhotos() {
@@ -691,9 +624,7 @@ void buildMassage() {
   lv_label_set_text(title, "MASSAGE");
   lv_obj_set_style_text_font(title, &lv_font_montserrat_28, 0);
   lv_obj_set_style_text_color(title, lv_color_white(), 0);
-  // FIX (TEST 041): was TOP_MID -60, which put the title under the
-  // Shemi button (x=245..420, y=8..74). Now tucked beside the back arrow.
-  lv_obj_align(title, LV_ALIGN_TOP_LEFT, 115, 22);
+  lv_obj_align(title, LV_ALIGN_TOP_MID, -60, 20);
 
   // Bed selector: big colored name buttons (Shemi/Ira/Both)
   buildBedSelector();
@@ -844,14 +775,37 @@ void populateFiles(lv_obj_t *list) {
 // ============================================================
 //  Settings screen
 // ============================================================
-lv_obj_t *rollH, *rollM, *lblFloorVal, *ddSaver, *sldSmall, *sldBig, *lblSmall, *lblBig, *ddRandom;
+lv_obj_t *lblFloorVal=NULL, *ddSaver=NULL, *sldSmall=NULL, *sldBig=NULL,
+         *lblSmall=NULL, *lblBig=NULL, *ddRandom=NULL;
+
+// TEST 042: the LVGL rollers never worked (minute roller stayed empty, hour
+// scrolled one way only). Replaced with plain +/- buttons and 12-hour AM/PM.
+lv_obj_t *lblSetH=NULL, *lblSetM=NULL, *lblSetAP=NULL;
+int setHour12 = 12;      // 1..12
+int setMinute = 0;       // 0..59
+bool setPM    = false;
+void refreshSetterLabels();
+
+void refreshSetterLabels() {
+  if (!lblSetH || !lblSetM || !lblSetAP) return;   // TEST 044 guard
+  lv_label_set_text_fmt(lblSetH, "%d", setHour12);
+  lv_label_set_text_fmt(lblSetM, "%02d", setMinute);
+  lv_label_set_text(lblSetAP, setPM ? "PM" : "AM");
+}
+static void evHourUp(lv_event_t *e) { setHour12++; if (setHour12 > 12) setHour12 = 1;  refreshSetterLabels(); }
+static void evHourDn(lv_event_t *e) { setHour12--; if (setHour12 < 1)  setHour12 = 12; refreshSetterLabels(); }
+static void evMinUp (lv_event_t *e) { setMinute++; if (setMinute > 59) setMinute = 0;  refreshSetterLabels(); }
+static void evMinDn (lv_event_t *e) { setMinute--; if (setMinute < 0)  setMinute = 59; refreshSetterLabels(); }
+static void evAmPm  (lv_event_t *e) { setPM = !setPM;                                  refreshSetterLabels(); }
 
 static void evSetTime(lv_event_t *e) {
-  int hh = lv_roller_get_selected(rollH);
-  int mm = lv_roller_get_selected(rollM);
-  baseSecOfDay = (long)hh*3600 + (long)mm*60; baseMillis = millis(); timeSet = true;
-  if (haveDS3231) ds3231SetHM(hh, mm);
-  Serial.printf("time set %02d:%02d\n", hh, mm);
+  int h24 = setHour12 % 12;              // 12 AM -> 0, 12 PM -> 12
+  if (setPM) h24 += 12;
+  baseSecOfDay = (long)h24*3600 + (long)setMinute*60;
+  baseMillis = millis(); timeSet = true;
+  if (haveDS3231) ds3231SetHM(h24, setMinute);
+  Serial.printf("time set %d:%02d %s  (%02d:%02d 24h)\n",
+                setHour12, setMinute, setPM ? "PM" : "AM", h24, setMinute);
 }
 static void evFloor(lv_event_t *e) {
   brightFloor = lv_slider_get_value(lv_event_get_target(e));
@@ -870,6 +824,16 @@ static void evSmall(lv_event_t *e) {
 static void evBig(lv_event_t *e) {
   setMinBig = lv_slider_get_value(lv_event_get_target(e));
   lv_label_set_text_fmt(lblBig, "%d", setMinBig); saveSettings();
+}
+static void evSlideshow(lv_event_t *e) {          // TEST 041
+  if (photoCount == 0) { Serial.println("slideshow: no photos"); return; }
+  slideOn     = true;
+  slideIdx    = 0;
+  slideNextMs = 0;                                // show the first one at once
+  state       = ST_PREVIEW;
+  lv_scr_load(scrBlank);
+  lv_refr_now(NULL);
+  Serial.printf("slideshow: %d photos, %d ms each\n", photoCount, SLIDE_MS);
 }
 static void evRandom(lv_event_t *e) {
   randomChar = lv_dropdown_get_selected(ddRandom); saveSettings();
@@ -927,14 +891,14 @@ void drawDiverClock(){
   long s = nowSecOfDay(); if (s<0) s=0;
   int hh=(s/3600)%12, mm=(s/60)%60, ss=s%60;
   const float D=3.14159265f/180.0f;
-  const uint16_t GCORE=0x37E9;   // bright green
-  const uint16_t GGLOW=0x0C86;   // dim green glow
+  const uint16_t GCORE=0x2586;   // TEST 043: green at ~70%
+  const uint16_t GGLOW=0x0844;   // dimmer glow to match
 
   // hour (short, thick), minute (long), second (thin bright)
   drawHand((hh*30+mm*0.5f)*D, 22, 120, 7, GGLOW, GCORE);
   drawHand((mm*6+ss*0.1f)*D,  26, 175, 5, GGLOW, GCORE);
   // second hand: thinner, brighter, longer, red-ish tip
-  drawHand((ss*6)*D, 40, 195, 2, 0x2985, 0xF800);
+  drawHand((ss*6)*D, 40, 195, 2, 0x1902, 0xA800);   // TEST 043: red at ~70%
 
   // center cap
   gfx->fillCircle(400,240,10,GCORE);
@@ -999,13 +963,13 @@ void buildAnalog() {
 
   // hand styles
   lv_style_init(&stHour); lv_style_set_line_width(&stHour, 16);
-  lv_style_set_line_color(&stHour, lv_color_hex(0xE8A23C));
+  lv_style_set_line_color(&stHour, lv_color_hex(0xA2712A));  // TEST 043: ~70%
   lv_style_set_line_rounded(&stHour, true);
   lv_style_init(&stMin); lv_style_set_line_width(&stMin, 11);
-  lv_style_set_line_color(&stMin, lv_color_hex(0xBFEFFF));
+  lv_style_set_line_color(&stMin, lv_color_hex(0x86A7B2));   // TEST 043: ~70%
   lv_style_set_line_rounded(&stMin, true);
   lv_style_init(&stSec); lv_style_set_line_width(&stSec, 4);
-  lv_style_set_line_color(&stSec, lv_color_hex(0xF06055));
+  lv_style_set_line_color(&stSec, lv_color_hex(0xA8433B));   // TEST 043: ~70%
   lv_style_set_line_rounded(&stSec, true);
 
   anaHour = lv_line_create(anaScr); lv_obj_add_style(anaHour, &stHour, 0);
@@ -1037,6 +1001,7 @@ void setHand(lv_obj_t *line, lv_point_t *pts, float ang, int len) {
 }
 
 void updateAnalog() {
+  if (!anaHour || !anaMin || !anaSec) return;      // TEST 044 guard
   long s = nowSecOfDay();
   if (s < 0) s = 0;
   int hh = (s/3600) % 12, mm = (s/60)%60, ss = s%60;
@@ -1082,10 +1047,14 @@ void buildClock() {
 }
 
 void updateClockFace() {
+  if (!clkMain || !clkGlow) return;               // TEST 044 guard
   long s = nowSecOfDay();
-  char buf[8];
-  if (s >= 0) snprintf(buf, sizeof(buf), "%02ld:%02ld", (s/3600), (s/60)%60);
-  else snprintf(buf, sizeof(buf), "--:--");
+  char buf[16];
+  if (s >= 0) {                                   // TEST 042: 12-hour + AM/PM
+    int h24 = (int)(s/3600), mm = (int)((s/60)%60);
+    int h12 = h24 % 12; if (h12 == 0) h12 = 12;
+    snprintf(buf, sizeof(buf), "%d:%02d %s", h12, mm, (h24 >= 12) ? "PM" : "AM");
+  } else snprintf(buf, sizeof(buf), "--:--");
   lv_label_set_text(clkMain, buf);
   lv_label_set_text(clkGlow, buf);
   if (tempOK) { char t[16]; snprintf(t, sizeof(t), "%.1f C", gTemp); lv_label_set_text(clkTemp, t); }
@@ -1114,9 +1083,6 @@ void buildSettings() {
   lv_obj_t *tAbout = lv_tabview_add_tab(tv, "About");
 
   // ---- Clock ----
-  static char hopts[24*3+1] = ""; static char mopts[60*3+1] = "";
-  hopts[0]=0; for (int i=0;i<24;i++){ char b[5]; snprintf(b,5,"%02d\n",i); strcat(hopts,b);} hopts[strlen(hopts)-1]=0;
-  mopts[0]=0; for (int i=0;i<60;i++){ char b[5]; snprintf(b,5,"%02d\n",i); strcat(mopts,b);} mopts[strlen(mopts)-1]=0;
 
   // centered row: [hour] : [min]
   lv_obj_t *row = lv_obj_create(tClock);
@@ -1129,31 +1095,56 @@ void buildSettings() {
   lv_obj_set_flex_align(row, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
   lv_obj_set_style_pad_column(row, 18, 0);
 
-  rollH = lv_roller_create(row); lv_roller_set_options(rollH,hopts,LV_ROLLER_MODE_INFINITE);
-  lv_obj_set_style_text_font(rollH,&lv_font_montserrat_40,0);
-  lv_roller_set_visible_row_count(rollH,3);
-  lv_obj_set_style_bg_color(rollH, lv_color_hex(0x18202A), 0);
-  lv_obj_set_style_radius(rollH, 14, 0);
-  lv_obj_set_style_bg_color(rollH, lv_color_hex(0x244055), LV_PART_SELECTED);
-  lv_obj_set_style_text_color(rollH, lv_color_hex(0xBFEFFF), LV_PART_SELECTED);
-  lv_obj_set_width(rollH,160); lv_obj_set_height(rollH,190);
-  lv_obj_set_style_flex_grow(rollH, 0, 0);
+  // ---- TEST 042: +/- fields.  [-] H [+]  :  [-] MM [+]   [AM/PM] ----
+  // helper-free on purpose: three explicit blocks, easy to read and tweak.
+  lv_obj_t *bHd = lv_btn_create(row); lv_obj_set_size(bHd, 64, 64);
+  lv_obj_add_event_cb(bHd, evHourDn, LV_EVENT_CLICKED, NULL);
+  lv_obj_t *lHd = lv_label_create(bHd); lv_label_set_text(lHd, "-");
+  lv_obj_set_style_text_font(lHd, &lv_font_montserrat_28, 0); lv_obj_center(lHd);
 
-  lv_obj_t *cln = lv_label_create(row); lv_label_set_text(cln,":");
-  lv_obj_set_style_text_font(cln,&lv_font_montserrat_40,0);
+  lblSetH = lv_label_create(row); lv_label_set_text(lblSetH, "12");
+  lv_obj_set_style_text_font(lblSetH, &lv_font_montserrat_40, 0);
+  lv_obj_set_style_text_color(lblSetH, lv_color_hex(0xBFEFFF), 0);
+
+  lv_obj_t *bHu = lv_btn_create(row); lv_obj_set_size(bHu, 64, 64);
+  lv_obj_add_event_cb(bHu, evHourUp, LV_EVENT_CLICKED, NULL);
+  lv_obj_t *lHu = lv_label_create(bHu); lv_label_set_text(lHu, "+");
+  lv_obj_set_style_text_font(lHu, &lv_font_montserrat_28, 0); lv_obj_center(lHu);
+
+  lv_obj_t *cln = lv_label_create(row); lv_label_set_text(cln, ":");
+  lv_obj_set_style_text_font(cln, &lv_font_montserrat_40, 0);
   lv_obj_set_style_text_color(cln, lv_color_hex(0xBFEFFF), 0);
 
-  rollM = lv_roller_create(row); lv_roller_set_options(rollM,mopts,LV_ROLLER_MODE_INFINITE);
-  lv_obj_set_style_text_font(rollM,&lv_font_montserrat_40,0);
-  lv_roller_set_visible_row_count(rollM,3);
-  lv_obj_set_style_bg_color(rollM, lv_color_hex(0x18202A), 0);
-  lv_obj_set_style_radius(rollM, 14, 0);
-  lv_obj_set_style_bg_color(rollM, lv_color_hex(0x244055), LV_PART_SELECTED);
-  lv_obj_set_style_text_color(rollM, lv_color_hex(0xBFEFFF), LV_PART_SELECTED);
-  lv_obj_set_width(rollM,160); lv_obj_set_height(rollM,190);
-  lv_obj_set_style_flex_grow(rollM, 0, 0);
+  lv_obj_t *bMd = lv_btn_create(row); lv_obj_set_size(bMd, 64, 64);
+  lv_obj_add_event_cb(bMd, evMinDn, LV_EVENT_CLICKED, NULL);
+  lv_obj_t *lMd = lv_label_create(bMd); lv_label_set_text(lMd, "-");
+  lv_obj_set_style_text_font(lMd, &lv_font_montserrat_28, 0); lv_obj_center(lMd);
 
-  { long s=nowSecOfDay(); if(s>=0){ lv_roller_set_selected(rollH,(s/3600),LV_ANIM_OFF); lv_roller_set_selected(rollM,(s/60)%60,LV_ANIM_OFF);} }
+  lblSetM = lv_label_create(row); lv_label_set_text(lblSetM, "00");
+  lv_obj_set_style_text_font(lblSetM, &lv_font_montserrat_40, 0);
+  lv_obj_set_style_text_color(lblSetM, lv_color_hex(0xBFEFFF), 0);
+
+  lv_obj_t *bMu = lv_btn_create(row); lv_obj_set_size(bMu, 64, 64);
+  lv_obj_add_event_cb(bMu, evMinUp, LV_EVENT_CLICKED, NULL);
+  lv_obj_t *lMu = lv_label_create(bMu); lv_label_set_text(lMu, "+");
+  lv_obj_set_style_text_font(lMu, &lv_font_montserrat_28, 0); lv_obj_center(lMu);
+
+  lv_obj_t *bAP = lv_btn_create(row); lv_obj_set_size(bAP, 92, 64);
+  lv_obj_set_style_bg_color(bAP, lv_color_hex(0x244055), 0);
+  lv_obj_add_event_cb(bAP, evAmPm, LV_EVENT_CLICKED, NULL);
+  lblSetAP = lv_label_create(bAP); lv_label_set_text(lblSetAP, "AM");
+  lv_obj_set_style_text_font(lblSetAP, &lv_font_montserrat_28, 0); lv_obj_center(lblSetAP);
+
+  // seed the fields from the clock we are already keeping
+  { long s = nowSecOfDay();
+    if (s >= 0) {
+      int h24 = (int)(s/3600), mm = (int)((s/60)%60);
+      setPM     = (h24 >= 12);
+      setHour12 = h24 % 12; if (setHour12 == 0) setHour12 = 12;
+      setMinute = mm;
+    }
+  }
+  refreshSetterLabels();
 
   lv_obj_t *setb = lv_btn_create(tClock); lv_obj_set_size(setb,220,64);
   lv_obj_align(setb,LV_ALIGN_BOTTOM_MID,0,-14);
@@ -1204,9 +1195,20 @@ void buildSettings() {
 
   // ---- Files ----
   fileList = lv_list_create(tFiles);
-  lv_obj_set_size(fileList, 760, 340);
+  lv_obj_set_size(fileList, 760, 290);
   lv_obj_align(fileList, LV_ALIGN_TOP_MID, 0, 0);
   populateFiles(fileList);
+
+  // TEST 041: slideshow of every photo in /photos, 2 s each, touch to stop
+  lv_obj_t *slb = lv_btn_create(tFiles);
+  lv_obj_set_size(slb, 320, 56);
+  lv_obj_align(slb, LV_ALIGN_BOTTOM_MID, 0, -6);
+  lv_obj_set_style_bg_color(slb, lv_color_hex(0x246080), 0);
+  lv_obj_add_event_cb(slb, evSlideshow, LV_EVENT_CLICKED, NULL);
+  lv_obj_t *sll = lv_label_create(slb);
+  lv_label_set_text(sll, LV_SYMBOL_IMAGE "  Slideshow (all photos)");
+  lv_obj_set_style_text_font(sll, &lv_font_montserrat_20, 0);
+  lv_obj_center(sll);
 
   // ---- About ----
   lv_obj_t *ab=lv_label_create(tAbout);
@@ -1228,163 +1230,7 @@ void buildSettings() {
   lv_obj_set_style_bg_color(scrBlank, lv_color_black(), 0);
 }
 
-// ============================================================
-//  RADIO screen  (new in TEST 041)
-//  Sends only a station INDEX to the audio node (id 9) over the
-//  same UART as the bed boxes. The node owns the stream URLs.
-// ============================================================
-int radioStation = -1;                 // -1 = stopped
-int radioVol     = 8;                  // 0..RADIO_VOL_MAX
-lv_obj_t *stationBtn[NUM_STATIONS];
-lv_obj_t *lblNowName, *lblNowSub, *nowStripe, *lblRadioVolVal;
-
-void refreshStationBtns() {
-  for (int i = 0; i < NUM_STATIONS; i++) {
-    bool on = (i == radioStation);
-    lv_obj_set_style_border_width(stationBtn[i], on ? 4 : 0, 0);
-    lv_obj_set_style_border_color(stationBtn[i], lv_color_white(), 0);
-  }
-}
-
-static void evStation(lv_event_t *e) {
-  int i = (int)(intptr_t)lv_event_get_user_data(e);
-  radioStation = i;
-  sendMsg(AUDIO_NODE_ID, CMD_RADIO_PLAY, i, radioVol);
-  lv_label_set_text(lblNowName, STATION_NAME[i]);
-  lv_label_set_text(lblNowSub, "connecting ...");
-  lv_obj_set_style_bg_color(nowStripe, lv_color_hex(STATION_COL[i]), 0);
-  refreshStationBtns();
-  Serial.printf("radio -> station %d (%s)\n", i, STATION_NAME[i]);
-}
-
-static void evRadioStop(lv_event_t *e) {
-  radioStation = -1;
-  sendMsg(AUDIO_NODE_ID, CMD_RADIO_STOP, 0, 0);
-  lv_label_set_text(lblNowName, "Radio off");
-  lv_label_set_text(lblNowSub, "");
-  lv_obj_set_style_bg_color(nowStripe, lv_color_hex(0x3A424C), 0);
-  refreshStationBtns();
-}
-
-static void evRadioVol(lv_event_t *e) {
-  lv_obj_t *s = lv_event_get_target(e);
-  radioVol = lv_slider_get_value(s);
-  lv_label_set_text_fmt(lblRadioVolVal, "%d", radioVol);
-  if (lv_event_get_code(e) == LV_EVENT_RELEASED)
-    sendMsg(AUDIO_NODE_ID, CMD_RADIO_VOL, 0, radioVol);
-}
-
-static void evRadioSleep(lv_event_t *e) {
-  sendMsg(AUDIO_NODE_ID, CMD_RADIO_SLEEP, 0, RADIO_SLEEP_MIN);
-  lv_label_set_text_fmt(lblNowSub, "sleep timer %d min", RADIO_SLEEP_MIN);
-}
-
-void buildRadio() {
-  scrRadio = lv_obj_create(NULL);
-  lv_obj_set_style_bg_color(scrRadio, lv_color_hex(0x101418), 0);
-
-  // ---- header ----
-  lv_obj_t *back = lv_btn_create(scrRadio);
-  lv_obj_set_size(back, 90, 50);
-  lv_obj_align(back, LV_ALIGN_TOP_LEFT, 10, 10);
-  lv_obj_add_event_cb(back, evGoHome, LV_EVENT_CLICKED, NULL);
-  lv_obj_t *bl = lv_label_create(back);
-  lv_label_set_text(bl, "<");
-  lv_obj_set_style_text_font(bl, &lv_font_montserrat_28, 0);
-  lv_obj_center(bl);
-
-  lv_obj_t *title = lv_label_create(scrRadio);
-  lv_label_set_text(title, "RADIO");
-  lv_obj_set_style_text_font(title, &lv_font_montserrat_28, 0);
-  lv_obj_set_style_text_color(title, lv_color_white(), 0);
-  lv_obj_align(title, LV_ALIGN_TOP_LEFT, 115, 22);
-
-  lv_obj_t *tn = lv_label_create(scrRadio);
-  lv_label_set_text_fmt(tn, "TEST %03d", TEST_NUMBER);
-  lv_obj_set_style_text_font(tn, &lv_font_montserrat_20, 0);
-  lv_obj_set_style_text_color(tn, lv_color_hex(0x556070), 0);
-  lv_obj_align(tn, LV_ALIGN_TOP_RIGHT, -12, 22);
-
-  // ---- now playing ----
-  nowStripe = lv_obj_create(scrRadio);
-  lv_obj_set_size(nowStripe, 8, 52);
-  lv_obj_align(nowStripe, LV_ALIGN_TOP_LEFT, 12, 78);
-  lv_obj_set_style_bg_color(nowStripe, lv_color_hex(0x3A424C), 0);
-  lv_obj_set_style_border_width(nowStripe, 0, 0);
-  lv_obj_set_style_radius(nowStripe, 3, 0);
-  lv_obj_clear_flag(nowStripe, LV_OBJ_FLAG_SCROLLABLE);
-
-  lblNowName = lv_label_create(scrRadio);
-  lv_label_set_text(lblNowName, "Radio off");
-  lv_obj_set_style_text_font(lblNowName, &lv_font_montserrat_28, 0);
-  lv_obj_set_style_text_color(lblNowName, lv_color_white(), 0);
-  lv_obj_align(lblNowName, LV_ALIGN_TOP_LEFT, 34, 80);
-
-  lblNowSub = lv_label_create(scrRadio);
-  lv_label_set_text(lblNowSub, "");
-  lv_obj_set_style_text_font(lblNowSub, &lv_font_montserrat_20, 0);
-  lv_obj_set_style_text_color(lblNowSub, lv_color_hex(0x8B939C), 0);
-  lv_obj_align(lblNowSub, LV_ALIGN_TOP_LEFT, 34, 110);
-
-  // ---- station tiles: 4 x 2 ----
-  for (int i = 0; i < NUM_STATIONS; i++) {
-    int col = i % 4, row = i / 4;
-    stationBtn[i] = lv_btn_create(scrRadio);
-    lv_obj_set_size(stationBtn[i], 185, 92);
-    lv_obj_align(stationBtn[i], LV_ALIGN_TOP_LEFT, 12 + col * 192, 148 + row * 100);
-    lv_obj_set_style_radius(stationBtn[i], 10, 0);
-    lv_obj_set_style_bg_color(stationBtn[i], lv_color_hex(STATION_COL[i]), 0);
-    lv_obj_add_event_cb(stationBtn[i], evStation, LV_EVENT_CLICKED, (void *)(intptr_t)i);
-    lv_obj_t *l = lv_label_create(stationBtn[i]);
-    lv_label_set_text(l, STATION_NAME[i]);
-    lv_obj_set_style_text_font(l, &lv_font_montserrat_20, 0);
-    lv_obj_center(l);
-  }
-
-  // ---- volume ----
-  lv_obj_t *vl = lv_label_create(scrRadio);
-  lv_label_set_text(vl, "Vol");
-  lv_obj_set_style_text_font(vl, &lv_font_montserrat_20, 0);
-  lv_obj_set_style_text_color(vl, lv_color_hex(0x8B939C), 0);
-  lv_obj_align(vl, LV_ALIGN_TOP_LEFT, 14, 372);
-
-  lv_obj_t *sld = lv_slider_create(scrRadio);
-  lv_obj_set_size(sld, 380, 20);
-  lv_obj_align(sld, LV_ALIGN_TOP_LEFT, 70, 374);
-  lv_slider_set_range(sld, 0, RADIO_VOL_MAX);
-  lv_slider_set_value(sld, radioVol, LV_ANIM_OFF);
-  lv_obj_add_event_cb(sld, evRadioVol, LV_EVENT_VALUE_CHANGED, NULL);
-  lv_obj_add_event_cb(sld, evRadioVol, LV_EVENT_RELEASED, NULL);
-
-  lblRadioVolVal = lv_label_create(scrRadio);
-  lv_label_set_text_fmt(lblRadioVolVal, "%d", radioVol);
-  lv_obj_set_style_text_font(lblRadioVolVal, &lv_font_montserrat_20, 0);
-  lv_obj_set_style_text_color(lblRadioVolVal, lv_color_white(), 0);
-  lv_obj_align(lblRadioVolVal, LV_ALIGN_TOP_LEFT, 466, 372);
-
-  // ---- sleep + stop ----
-  lv_obj_t *slp = lv_btn_create(scrRadio);
-  lv_obj_set_size(slp, 120, 60);
-  lv_obj_align(slp, LV_ALIGN_TOP_LEFT, 520, 352);
-  lv_obj_set_style_bg_color(slp, lv_color_hex(0x308050), 0);
-  lv_obj_add_event_cb(slp, evRadioSleep, LV_EVENT_CLICKED, NULL);
-  lv_obj_t *sl = lv_label_create(slp);
-  lv_label_set_text_fmt(sl, "Sleep %d", RADIO_SLEEP_MIN);
-  lv_obj_set_style_text_font(sl, &lv_font_montserrat_20, 0);
-  lv_obj_center(sl);
-
-  lv_obj_t *stp = lv_btn_create(scrRadio);
-  lv_obj_set_size(stp, 133, 60);
-  lv_obj_align(stp, LV_ALIGN_TOP_LEFT, 655, 352);
-  lv_obj_set_style_bg_color(stp, lv_color_hex(0xD03030), 0);
-  lv_obj_add_event_cb(stp, evRadioStop, LV_EVENT_CLICKED, NULL);
-  lv_obj_t *stl = lv_label_create(stp);
-  lv_label_set_text(stl, "Stop");
-  lv_obj_set_style_text_font(stl, &lv_font_montserrat_28, 0);
-  lv_obj_center(stl);
-
-  refreshStationBtns();
-}
+void buildRadio() { buildPlaceholder(&scrRadio, "RADIO"); }
 void buildAC()    { buildPlaceholder(&scrAC, "AC"); }
 
 
@@ -1411,6 +1257,7 @@ void saveSettings() {
 }
 
 void updateSensorLabel() {
+  if (!lblSensors) return;                        // TEST 044 guard
   // pressure trend: compare to a reference taken every 30 min
   if (tempOK) {
     if (pressRef == 0) { pressRef = gPress; pressRefMs = millis(); }
@@ -1499,16 +1346,33 @@ void drawClockDigits() {
   int x0 = (SCREEN_W - totalW)/2;
   int y0 = (SCREEN_H - DG_H)/2 + 10;
   int hh = -1, mm = -1;
-  if (s >= 0) { hh = s/3600; mm = (s/60)%60; }
+  bool pm = false;
+  if (s >= 0) {                                    // TEST 042: 12-hour
+    int h24 = (int)(s/3600);
+    pm = (h24 >= 12);
+    hh = h24 % 12; if (hh == 0) hh = 12;
+    mm = (s/60)%60;
+  }
   int d[4];
   if (s >= 0) { d[0]=hh/10; d[1]=hh%10; d[2]=mm/10; d[3]=mm%10; }
   int x = x0;
   for (int i=0;i<4;i++){
     uint8_t segs = (s>=0) ? SEGMAP[d[i]] : 0x40;   // '-' if unset
+    if (s>=0 && i==0 && d[0]==0) segs = 0x00;      // blank the leading zero
     drawSeg(x, y0, DG_W, DG_H, DG_T, segs, CLK_ON, CLK_OFF);
     x += DG_W + DG_GAP;
     if (i==1) x += COLON_W;
   }
+}
+void drawClockAmPm(){                              // TEST 042
+  long s = nowSecOfDay();
+  if (s < 0) return;
+  int totalW = 4*DG_W + 3*DG_GAP + COLON_W;
+  int x0 = (SCREEN_W - totalW)/2;
+  int y0 = (SCREEN_H - DG_H)/2 + 10;
+  gfx->setTextColor(CLK_ON); gfx->setTextSize(4);
+  gfx->setCursor(x0 + totalW + 16, y0 + DG_H - 40);
+  gfx->print(((s/3600) >= 12) ? "PM" : "AM");
 }
 void drawColon(bool on){
   int totalW = 4*DG_W + 3*DG_GAP + COLON_W;
@@ -1531,6 +1395,7 @@ void drawClockScreen(){
   gfx->fillScreen(BLACK);
   drawClockDigits();
   drawColon(true);
+  drawClockAmPm();
   drawSaverTemp();
   if (!timeSet) {
     gfx->setTextColor(0x7BEF); gfx->setTextSize(2);
@@ -1679,11 +1544,24 @@ void loop() {
     int16_t x, y; bool t = false;
     if (gt911Addr) gt911Read(x, y, t);
     if (t) {
+      slideOn = false;                     // TEST 041: a touch stops the show
       state = ST_UI;
       gfx->fillScreen(BLACK);              // wipe the photo
       lv_scr_load(scrSettings);            // back to Settings
       lv_refr_now(NULL);                   // force a complete repaint now
       delay(200);                          // debounce the release
+    } else if (slideOn && millis() >= slideNextMs) {
+      // TEST 041: advance the slideshow. showPhoto() is size-guarded and
+      // frees its buffer every time, so a long run cannot exhaust memory.
+      if (slideIdx >= photoCount) slideIdx = 0;
+      if (!showPhoto(photoList[slideIdx])) {
+        gfx->fillScreen(BLACK);
+        gfx->setTextColor(0x7BEF); gfx->setTextSize(2);
+        gfx->setCursor(200, 230); gfx->print("skipped: ");
+        gfx->print(photoList[slideIdx]);
+      }
+      slideIdx++;
+      slideNextMs = millis() + SLIDE_MS;
     }
     if (millis() - lastEaseMs > 25) { lastEaseMs = millis(); easeBacklight(); }
     delay(10);
@@ -1703,27 +1581,19 @@ void loop() {
 }
 
 /* ============================================================
- *                        TEST  041   (end of file)
- *  Panel — Stage 3 — RADIO SCREEN: 8 station tiles in genre
- *  colours, now-playing bar with colour stripe, volume 0-21,
- *  Sleep 30, Stop. Sends station INDEX to audio node id 9 over
- *  the shared bed-box UART (cmd 6..9). Station names/colours in
- *  STATION_NAME / STATION_COL at the top of this file - the
- *  node's URL list must be in the SAME ORDER.
- *  Also: massage title moved off the Shemi button.
- *  Next: audio node firmware (WT32-ETH01 + PCM5102A) as its
- *  own TEST 001, then verify a tap here starts a stream there.
- *  ---- previous, unchanged ----
- *  minute-roller fix + DIVER-watch clock
- *  time-picker rollers; preview uses blank screen;
- *  SETTINGS panel (Clock/Display/Massage/
- *  Files/About, saved to flash) + DS3231 RTC + home
- *  icon tiles + temp/pressure-trend,
- *  named colored bed selector (Shemi/Ira/Both), Random preset,
- *  Radio/AC
- *  placeholders + CLOCK screensaver (7-segment
- *  HH:MM ~3.6cm, temp small top-right). Time: 'time HH:MM' in
- *  Serial Monitor; audio node will supply NTP later over UART.
- *  Requires platformio.ini v4 (lvgl 8.3, unchanged from 021).
- *  Next: wire the bed box to P3 and watch taps drive motors.
+ *                        TEST  045   (end of file)
+ * ============================================================
+ *  Panel - Stage 3 - rebuild of the lost 041-044 on top of 040
+ *
+ *   041  memory-safe photos (600 KB guard, PSRAM then heap,
+ *        always freed) + Files-tab slideshow, 2 s per photo
+ *   042  +/- time setter replacing the broken rollers,
+ *        12-hour AM/PM on the settings, LVGL and 7-segment faces
+ *   043  clock hands dimmed to about 70 percent
+ *   044  null guards on updateSensorLabel, updateClockFace and
+ *        updateAnalog, all display pointers initialised to NULL
+ *
+ *  platformio.ini v4 - LV_CONF_SKIP, no lv_conf.h needed.
+ *  NOT hardware-tested. Watch the serial monitor on first boot.
+ *  Next: bed box TEST 0014 on UART, then end-to-end motor test.
  * ============================================================ */
