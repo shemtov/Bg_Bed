@@ -1,5 +1,5 @@
 /* ============================================================
- *                        TEST  045
+ *                        TEST  055
  * ============================================================
  *  PANEL FIRMWARE  (ESP32-8048S043, ESP32-S3-WROOM-1 N16R8)
  *  Adjustable Bed Massage Retrofit - Revision 4
@@ -23,6 +23,108 @@
  *         LoadProhibited reboot at EXCVADDR 0x00000022, which
  *         was a timer touching a label before it was built.
  *
+ *  NEW IN 055 - the 1 Hz screensaver flicker:
+ *   Every tick repainted all 800x480: dial first, hands after. The
+ *   RGB panel scans continuously, so it could show a frame with the
+ *   dial and no hands. That gap was the flash. Caching the dial in
+ *   046 removed the SD read and the decode, but not the gap.
+ *   Now a 424x424 PSRAM buffer over the clock face is filled from
+ *   the cached dial, the hands are rasterised INTO it, and the
+ *   finished image is blitted ONCE - so no half-drawn frame is ever
+ *   on screen. The temperature repaints only when the whole number
+ *   changes, not once a second. Falls back to the old path if the
+ *   buffer will not allocate.
+ *
+ *  NEW IN 054 - MICROPHONE BRING-UP (capture only, no keyword):
+ *   INMP441 on I2S0.  SD=GPIO11(DIN)  SCK=GPIO12(BCK)  WS=GPIO13
+ *   VDD=3.3V, GND=GND, L/R=GND (left channel).
+ *   A live level bar sits at the bottom of the HOME screen and the
+ *   serial log prints RMS and peak once a second. That is the whole
+ *   purpose of this test: prove audio arrives before writing any
+ *   recognition on top of it.
+ *   Four bugs from the old uncompiled microphone.cpp are fixed here:
+ *   32-bit reads (not 16), mck_io_num set explicitly (it was being
+ *   left at GPIO0), STAND_I2S format, and a non-blocking read so
+ *   LVGL is never stalled.
+ *
+ *  NEW IN 053 - SD CARD RETIRED, DIAL MOVED INTO FLASH:
+ *   The panel exposes only 7 GPIOs (11,12,13,19,20,17,18) and all
+ *   were taken. The INMP441 microphone needs 11/12/13, which were
+ *   the SD card's MOSI/CLK/MISO. The card loses.
+ *   - ENABLE_SD is a switch, not a deletion. Set it back to 1 when
+ *     the microphone moves to the WT32-ETH01 and the pins are free.
+ *   - With ENABLE_SD 0, SPI.begin() and SD.begin() are never called,
+ *     so CS is never asserted, the card holds its data line high-Z
+ *     and the microphone owns the bus safely.
+ *   - the dial now lives in flash (include/dial_image.h, 16921 B of
+ *     a 16 MB part) and no longer depends on the card at all.
+ *   - LOST while ENABLE_SD is 0: the photo slideshow, the Files
+ *     browser and the welcome photo.
+ *
+ *  NEW IN 052:
+ *   - Settings > Clock: the hour, colon and minute were 0xBFEFFF,
+ *     a very light blue. LV_CONF_SKIP leaves LV_THEME_DEFAULT_DARK
+ *     at 0, so the tab page behind them is the LIGHT theme's near
+ *     white - light blue on white, effectively invisible. They are
+ *     black now. Named SET_TEXT_COL so it is one edit, not three.
+ *   - the same washed-out combination applies to the About text and
+ *     the massage note; left alone for now, see SET_TEXT_COL.
+ *
+ *  NEW IN 051 - temp_font.h regenerated, 050 would not compile:
+ *   GFXglyph stores xOffset/yOffset as int8_t and GFXfont stores
+ *   yAdvance as uint8_t. Measured from the baseline, 150 px digits
+ *   need yOffset -147 and yAdvance 284 - both overflow. Offsets are
+ *   now measured from the TOP OF THE DIGITS, so digits get yOffset 0
+ *   and every field fits. The cursor y is therefore the digit top,
+ *   not the baseline. '.' was dropped: it would sit ~150 px below
+ *   the reference and cannot fit int8_t either.
+ *
+ *  NEW IN 050:
+ *   - the temperature uses a real TrueType-derived GFX font
+ *     (include/temp_font.h) instead of the built-in 5x7 bitmap
+ *     scaled 20x. Digits are 150 px, the C is 46 px, both drawn
+ *     from outlines so the curves are smooth.
+ *   - placement now comes from getTextBounds() rather than the
+ *     6x8 cell arithmetic, which no longer applies.
+ *
+ *  NEW IN 049:
+ *   - temperature digits smaller; the C keeps its size and moves to
+ *     the right of the digits, on the same bottom line.
+ *   - dial buffer cleared to black before decode, so a failed decode
+ *     shows black rather than uninitialised PSRAM (a blue gradient).
+ *   - the decode callback counts blocks; the cache is only trusted if
+ *     at least one block was actually written.
+ *   - any dial failure is drawn ON SCREEN, no serial monitor needed.
+ *
+ *  NEW IN 048 - screensaver layout:
+ *   - clock face moved LEFT. Its centre is now CLOCK_CX/CLOCK_CY,
+ *     one place instead of 400,240 repeated three times.
+ *   - temperature fills the freed space on the right, much larger
+ *     (character cell is 6*size wide by 8*size tall, size 24 =
+ *     144 x 192 px per digit), still whole degrees.
+ *   - REQUIRES the matching left-positioned dial image on the SD
+ *     card. A centred dial with CLOCK_CX=240 will not line up.
+ *
+ *  NEW IN 047 - fixes the confirmed boot crash:
+ *   Guru Meditation (StoreProhibited) EXCVADDR 0x00000098 in
+ *   lv_obj_class_create_obj <- lv_list_add_btn <- populateFiles.
+ *   LVGL's heap defaults to 32 KB; one list button per SD file at
+ *   boot exhausted it and the allocator's NULL was dereferenced.
+ *   - the Files list is built when you OPEN the Files tab, and
+ *     freed when you leave it. Nothing is built at boot.
+ *   - populateFiles checks lv_mem_monitor() before every row and
+ *     stops early instead of letting the allocation fail.
+ *   - hard cap of BROWSE_MAX_SHOWN rows.
+ *   - platformio.ini gains -DLV_MEM_SIZE=65536 for headroom.
+ *
+ *  NEW IN 046:
+ *   - dial JPEG decoded ONCE into PSRAM at boot, then blitted each
+ *     tick. 045 re-read and re-decoded it from SD every second.
+ *   - temperature moved to the right margin, drawn very large,
+ *     whole degrees only (no .1 / .2) on every clock face.
+ *   - boot now prints whether the dial was found and cached, so a
+ *     missing /diver_dial.jpg can no longer fail silently.
+ *
  *  NOT TESTED ON HARDWARE. TEST 040 ran; 041-044 were tested by
  *  Shemi but their source is gone, so the code below is written
  *  from the change descriptions, not recovered. Flash it and
@@ -31,20 +133,24 @@
  *  Board: ESP32-8048S043 | 800x480 ST7262 RGB | GT911 touch
  *  I2C SDA=19 SCL=20 | SD CS=10 MOSI=11 CLK=12 MISO=13 (FAT32)
  *  UART1 to bed box: TX=IO17 RX=IO18 @115200 via P3
- *  TEST_NUMBER 45 - printed at boot AND shown on screen.
+ *  TEST_NUMBER 55 - printed at boot AND shown on screen.
  * ============================================================ */
 
 #include <Arduino.h>
 #include <math.h>
+#include <string.h>
 #include <Wire.h>
 #include <SPI.h>
 #include <SD.h>
+#include <driver/i2s.h>        // TEST 054: INMP441 microphone
 #include <JPEGDEC.h>
 #include <Arduino_GFX_Library.h>
+#include "temp_font.h"          // TEST 050: TempBig / TempSmall, put it in include/
+#include "dial_image.h"         // TEST 053: the dial, embedded in flash
 #include <lvgl.h>
 #include <Preferences.h>
 
-#define TEST_NUMBER 45
+#define TEST_NUMBER 55
 
 // ---- backlight ----
 #define GFX_BL 2
@@ -56,6 +162,21 @@ int brightFloor = 85;         // settings-adjustable
 float targetDuty = 255, curDuty = 255;
 
 // ---- SD ----
+// ---- TEST 054: INMP441 microphone (I2S0) ----
+// These are the SD card's old pins. Wired: SD->11, SCK->12, WS->13,
+// VDD->3.3V, GND->GND, L/R->GND. ENABLE_SD must stay 0 while this is 1.
+#define ENABLE_MIC       1
+#define MIC_DIN_PIN      11
+#define MIC_BCK_PIN      12
+#define MIC_WS_PIN       13
+#define MIC_PORT         I2S_NUM_0
+#define MIC_SAMPLE_RATE  16000
+#define MIC_FRAMES       256      // 32-bit samples per read
+
+// TEST 053: 0 = the microphone owns GPIO 11/12/13. Set to 1 only when the
+// mic has moved to another board and the SPI pins are free again.
+#define ENABLE_SD 0
+
 #define SD_CS 10
 #define SD_MOSI 11
 #define SD_CLK 12
@@ -63,7 +184,43 @@ float targetDuty = 255, curDuty = 255;
 #define WELCOME_FILE "/welcome_800x480.jpg"
 #define PHOTO_DIR "/photos"
 #define DIAL_FILE "/diver_dial.jpg"
+// TEST 048: where the clock face sits on the screensaver. Must match the
+// dial image on the card - the artwork in dial_left_*.jpg is centred on 240.
+#define CLOCK_CX 240
+#define CLOCK_CY 240
+// Temperature block, centred in the space to the right of the dial.
+#define TEMP_CX  628
+// TEST 050: sizes now come from the font in temp_font.h (digits 150 px,
+// C 46 px). TEMP_C_GAP is still the space between the digits and the C.
+#define TEMP_C_GAP   16
+// TEST 055: the off-screen compose region around the clock face. The
+// longest hand reaches 195 px plus its tip circle, so 212 covers it.
+#define CLK_REG_X0   28
+#define CLK_REG_Y0   28
+#define CLK_REG_W    424
+#define CLK_REG_H    424
+// Area wiped before the temperature is redrawn (only when it changes).
+#define TEMP_CLR_X   456
+#define TEMP_CLR_Y   130
+#define TEMP_CLR_W   344
+#define TEMP_CLR_H   250
+// TEST 052: Settings > Clock text. The tabview page uses LVGL's light
+// theme (near white), so light colours vanish. Black reads cleanly.
+#define SET_TEXT_COL 0x000000
 bool haveDial = false;
+// TEST 054: microphone state
+bool  micReady   = false;
+float micRms     = 0.0f;   // 0..1
+float micPeak    = 0.0f;   // 0..1
+uint32_t micReads = 0;
+lv_obj_t *micBar = NULL, *micLbl = NULL;
+
+// TEST 046: the dial is decoded once into PSRAM and reused every tick.
+uint16_t *dialBuf   = NULL;      // 800*480 RGB565 = 768000 bytes
+bool      dialCached = false;
+int       dialBlocks = 0;        // TEST 049: blocks the decoder actually wrote
+uint16_t *clockBuf  = NULL;      // TEST 055: off-screen compose buffer
+char      dialStatus[64] = "dial: not checked";
 #define WELCOME_MS 2000
 uint32_t saverTimeoutMs = 300000UL;   // settings-adjustable
 #define PHOTO_MS 2000
@@ -148,6 +305,11 @@ int setMinSmall = 60, setMinBig = 165;   // motor thresholds (panel copy)
 int randomChar = 1;                      // 0 gentle 1 lively 2 wild
 // file browser
 #define MAX_BROWSE 80
+#define SETTINGS_TAB_FILES 3     // Clock 0, Display 1, Massage 2, Files 3
+// TEST 047: limits that keep the Files list from exhausting LVGL's heap
+#define BROWSE_MAX_SHOWN 40      // hard cap on rows
+#define LV_FREE_FLOOR    10240   // stop if LVGL free heap drops below this
+#define LV_BIGGEST_FLOOR 3072    // ...or if the largest free block is small
 char browseList[MAX_BROWSE][80];
 int browseCount = 0;
 char previewPath[96];
@@ -186,7 +348,7 @@ void buildClock();
 void updateClockFace();
 void buildAnalog();
 void updateAnalog();
-void drawDiverClock();
+void drawDiverClock(bool full = false);
 // clock globals/functions (defined later, used by Settings above them)
 extern bool timeSet;
 extern uint32_t baseMillis;
@@ -272,6 +434,154 @@ bool showPhoto(const char *path) {
   buf = NULL;
   return ok;
 }
+// ============================================================
+//  TEST 046: decode the dial once into a PSRAM framebuffer
+// ============================================================
+int jpegToBufCb(JPEGDRAW *p) {
+  if (!dialBuf) return 0;
+  dialBlocks++;                  // TEST 049: prove the decoder reached us
+  for (int row = 0; row < p->iHeight; row++) {
+    int y = p->y + row;
+    if (y < 0 || y >= SCREEN_H) continue;
+    for (int col = 0; col < p->iWidth; col++) {
+      int x = p->x + col;
+      if (x < 0 || x >= SCREEN_W) continue;
+      dialBuf[(size_t)y * SCREEN_W + x] = p->pPixels[row * p->iWidth + col];
+    }
+  }
+  return 1;
+}
+
+bool cacheDial() {
+  dialCached = false;
+  dialBlocks = 0;
+
+  if (!dialBuf)
+    dialBuf = (uint16_t *)ps_malloc((size_t)SCREEN_W * SCREEN_H * sizeof(uint16_t));
+  if (!dialBuf) {
+    snprintf(dialStatus, sizeof(dialStatus), "dial: no PSRAM for the 768 KB buffer");
+    Serial.println(dialStatus); return false;
+  }
+  memset(dialBuf, 0, (size_t)SCREEN_W * SCREEN_H * sizeof(uint16_t));
+
+  // TEST 053: the dial is compiled into the firmware. JPEGDEC wants a
+  // writable pointer, so copy the 17 KB out of flash into heap first.
+  uint8_t *srcbuf = (uint8_t *)malloc(DIAL_JPG_LEN);
+  if (!srcbuf) {
+    snprintf(dialStatus, sizeof(dialStatus), "dial: no heap for %d bytes", DIAL_JPG_LEN);
+    Serial.println(dialStatus); return false;
+  }
+  memcpy_P(srcbuf, DIAL_JPG, DIAL_JPG_LEN);
+
+  bool ok = false;
+  if (jpeg.openRAM(srcbuf, DIAL_JPG_LEN, jpegToBufCb)) {
+    jpeg.setPixelType(RGB565_LITTLE_ENDIAN);
+    ok = jpeg.decode(0, 0, 0);
+    jpeg.close();
+  }
+  free(srcbuf);
+
+  dialCached = ok && (dialBlocks > 0);
+  if (dialCached)
+    snprintf(dialStatus, sizeof(dialStatus), "dial: flash ok, %d bytes, %d blocks",
+             DIAL_JPG_LEN, dialBlocks);
+  else if (ok)
+    snprintf(dialStatus, sizeof(dialStatus), "dial: decoded but 0 blocks written");
+  else
+    snprintf(dialStatus, sizeof(dialStatus), "dial: flash decode FAILED");
+  Serial.println(dialStatus);
+  return dialCached;
+}
+
+// ============================================================
+//  TEST 054: INMP441 microphone
+// ============================================================
+static int32_t micBuf[MIC_FRAMES];
+
+bool micBegin() {
+#if !ENABLE_MIC
+  Serial.println("mic: disabled");
+  return false;
+#else
+  if (ENABLE_SD) {
+    Serial.println("mic: REFUSING to start - ENABLE_SD is 1 and shares GPIO 11/12/13");
+    return false;
+  }
+
+  i2s_config_t cfg;
+  memset(&cfg, 0, sizeof(cfg));
+  cfg.mode                 = (i2s_mode_t)(I2S_MODE_MASTER | I2S_MODE_RX);
+  cfg.sample_rate          = MIC_SAMPLE_RATE;
+  cfg.bits_per_sample      = I2S_BITS_PER_SAMPLE_32BIT;   // INMP441 is 24-bit in 32-bit slots
+  cfg.channel_format       = I2S_CHANNEL_FMT_ONLY_LEFT;   // L/R tied to GND
+  cfg.communication_format = I2S_COMM_FORMAT_STAND_I2S;
+  cfg.intr_alloc_flags     = ESP_INTR_FLAG_LEVEL1;
+  cfg.dma_buf_count        = 4;
+  cfg.dma_buf_len          = MIC_FRAMES;
+  cfg.use_apll             = false;
+  cfg.tx_desc_auto_clear   = false;
+  cfg.fixed_mclk           = 0;
+
+  esp_err_t err = i2s_driver_install(MIC_PORT, &cfg, 0, NULL);
+  if (err != ESP_OK) {
+    Serial.printf("mic: i2s_driver_install failed (%d)\n", (int)err);
+    return false;
+  }
+
+  // Every field assigned. mck_io_num is FIRST in this struct and a
+  // designated initialiser that omits it silently selects GPIO0.
+  i2s_pin_config_t pins;
+  pins.mck_io_num   = I2S_PIN_NO_CHANGE;
+  pins.bck_io_num   = MIC_BCK_PIN;
+  pins.ws_io_num    = MIC_WS_PIN;
+  pins.data_out_num = I2S_PIN_NO_CHANGE;
+  pins.data_in_num  = MIC_DIN_PIN;
+
+  err = i2s_set_pin(MIC_PORT, &pins);
+  if (err != ESP_OK) {
+    Serial.printf("mic: i2s_set_pin failed (%d)\n", (int)err);
+    i2s_driver_uninstall(MIC_PORT);
+    return false;
+  }
+
+  i2s_zero_dma_buffer(MIC_PORT);
+  micReady = true;
+  Serial.printf("mic: INMP441 ready - %d Hz, 32-bit, DIN=%d BCK=%d WS=%d\n",
+                MIC_SAMPLE_RATE, MIC_DIN_PIN, MIC_BCK_PIN, MIC_WS_PIN);
+  return true;
+#endif
+}
+
+// Non-blocking: returns false if no full buffer was ready this tick.
+bool micRead() {
+  if (!micReady) return false;
+
+  size_t got = 0;
+  // 20 ms timeout: at 16 kHz a 256-frame buffer fills in 16 ms, so this
+  // usually returns immediately and never stalls the UI.
+  esp_err_t err = i2s_read(MIC_PORT, (void *)micBuf, sizeof(micBuf), &got,
+                           20 / portTICK_PERIOD_MS);
+  if (err != ESP_OK || got < sizeof(int32_t)) return false;
+
+  size_t n = got / sizeof(int32_t);
+  double sumsq = 0.0;
+  int32_t peak = 0;
+  for (size_t i = 0; i < n; i++) {
+    // INMP441 puts 24 bits left-justified in a 32-bit slot. Shift down
+    // to a signed 16-bit range so the numbers are readable.
+    int32_t s = micBuf[i] >> 14;
+    if (s >  32767) s =  32767;
+    if (s < -32768) s = -32768;
+    int32_t a = (s < 0) ? -s : s;
+    if (a > peak) peak = a;
+    sumsq += (double)s * (double)s;
+  }
+  micRms  = (float)(sqrt(sumsq / (double)n) / 32768.0);
+  micPeak = (float)peak / 32768.0f;
+  micReads++;
+  return true;
+}
+
 void scanPhotos() {
   photoCount = 0;
   File dir = SD.open(PHOTO_DIR);
@@ -604,6 +914,19 @@ void buildHome() {
   lv_label_set_text(gi, LV_SYMBOL_SETTINGS);
   lv_obj_set_style_text_font(gi, &lv_font_montserrat_28, 0);
   lv_obj_center(gi);
+
+  // ---- TEST 054: microphone level meter along the bottom ----
+  micLbl = lv_label_create(scrHome);
+  lv_label_set_text(micLbl, "mic --");
+  lv_obj_set_style_text_font(micLbl, &lv_font_montserrat_20, 0);
+  lv_obj_set_style_text_color(micLbl, lv_color_hex(0x90C0E0), 0);
+  lv_obj_align(micLbl, LV_ALIGN_BOTTOM_LEFT, 20, -12);
+
+  micBar = lv_bar_create(scrHome);
+  lv_obj_set_size(micBar, 560, 22);
+  lv_obj_align(micBar, LV_ALIGN_BOTTOM_RIGHT, -20, -12);
+  lv_bar_set_range(micBar, 0, 100);
+  lv_bar_set_value(micBar, 0, LV_ANIM_OFF);
 }
 
 void buildMassage() {
@@ -722,14 +1045,32 @@ void buildPlaceholder(lv_obj_t **scr, const char *name) {
 lv_obj_t *fileList = NULL;
 void populateFiles(lv_obj_t *list) {
   browseCount = 0;
+  if (!list) return;
   lv_obj_clean(list);
+#if !ENABLE_SD
+  // TEST 053: those pins are the microphone now. Do not touch SPI.
+  lv_list_add_text(list, "SD disabled - GPIO 11/12/13 are the microphone");
+  return;
+#else
+  bool truncated = false;
   const char *dirs[2] = { "/", "/photos" };
-  for (int di = 0; di < 2; di++) {
+  for (int di = 0; di < 2 && !truncated; di++) {
     File dir = SD.open(dirs[di]);
     if (!dir || !dir.isDirectory()) continue;
     File e;
     while ((e = dir.openNextFile()) && browseCount < MAX_BROWSE) {
       if (!e.isDirectory()) {
+        // TEST 047: never ask LVGL for a button it has no room for.
+        // This exact call is what crashed TEST 046 inside lv_list_add_btn.
+        lv_mem_monitor_t mon;
+        lv_mem_monitor(&mon);
+        if (browseCount >= BROWSE_MAX_SHOWN ||
+            mon.free_size < LV_FREE_FLOOR ||
+            mon.free_biggest_size < LV_BIGGEST_FLOOR) {
+          truncated = true;
+          e.close();
+          break;
+        }
         String n = e.name();
         if (!n.startsWith("/")) n = String(dirs[di]) + (di==0?"":"/") + n;
         String low = n; low.toLowerCase();
@@ -769,7 +1110,28 @@ void populateFiles(lv_obj_t *list) {
     }
     dir.close();
   }
-  if (browseCount == 0) lv_list_add_text(list, "SD empty / not mounted");
+  if (truncated)
+    lv_list_add_text(list, "... more files not shown (low memory)");
+  else if (browseCount == 0)
+    lv_list_add_text(list, "SD empty / not mounted");
+
+  lv_mem_monitor_t mon; lv_mem_monitor(&mon);
+  Serial.printf("files: %d rows%s, LVGL free %u, biggest %u\n",
+                browseCount, truncated ? " (truncated)" : "",
+                (unsigned)mon.free_size, (unsigned)mon.free_biggest_size);
+#endif // ENABLE_SD
+}
+
+// TEST 047: build the Files list only while that tab is on screen.
+static void evSettingsTab(lv_event_t *e) {
+  lv_obj_t *tv = lv_event_get_target(e);
+  if (!tv || !fileList) return;
+  if (lv_tabview_get_tab_act(tv) == SETTINGS_TAB_FILES) {
+    populateFiles(fileList);
+  } else if (browseCount > 0) {
+    lv_obj_clean(fileList);
+    browseCount = 0;
+  }
 }
 
 // ============================================================
@@ -868,7 +1230,7 @@ void thickLine(int x0,int y0,int x1,int y1,int r,uint16_t col){
 
 void drawHand(float ang, int lenTail, int lenTip, int r, uint16_t glow, uint16_t core){
   // ang radians, 0=12 o'clock
-  int cx=400, cy=240;
+  int cx=CLOCK_CX, cy=CLOCK_CY;
   int tx = cx + (int)(sinf(ang)*lenTip);
   int ty = cy - (int)(cosf(ang)*lenTip);
   int bx = cx - (int)(sinf(ang)*lenTail);
@@ -884,9 +1246,65 @@ void drawHand(float ang, int lenTail, int lenTip, int r, uint16_t glow, uint16_t
   gfx->fillCircle(ax,ay,r+3,core);
 }
 
-void drawDiverClock(){
-  if (haveDial) { if(!showPhoto(DIAL_FILE)) gfx->fillScreen(BLACK); }
-  else gfx->fillScreen(0x0842);
+// ============================================================
+//  TEST 055: rasterisers that draw into clockBuf, not the screen.
+//  Coordinates are region-local (subtract CLK_REG_X0 / CLK_REG_Y0).
+// ============================================================
+static void cbFillCircle(int cx, int cy, int r, uint16_t col) {
+  if (!clockBuf) return;
+  for (int dy = -r; dy <= r; dy++) {
+    int y = cy + dy;
+    if (y < 0 || y >= CLK_REG_H) continue;
+    int span = (int)(sqrtf((float)(r * r - dy * dy)) + 0.5f);
+    int x0 = cx - span, x1 = cx + span;
+    if (x0 < 0) x0 = 0;
+    if (x1 >= CLK_REG_W) x1 = CLK_REG_W - 1;
+    uint16_t *row = &clockBuf[(size_t)y * CLK_REG_W];
+    for (int x = x0; x <= x1; x++) row[x] = col;
+  }
+}
+
+static void cbThickLine(int x0, int y0, int x1, int y1, int r, uint16_t col) {
+  int dx = abs(x1 - x0), dy = abs(y1 - y0);
+  int steps = (dx > dy) ? dx : dy;
+  if (steps < 1) steps = 1;
+  for (int i = 0; i <= steps; i++) {
+    cbFillCircle(x0 + (x1 - x0) * i / steps,
+                 y0 + (y1 - y0) * i / steps, r, col);
+  }
+}
+
+static void cbDrawHand(float ang, int lenTail, int lenTip, int r,
+                       uint16_t glow, uint16_t core) {
+  int cx = CLOCK_CX - CLK_REG_X0, cy = CLOCK_CY - CLK_REG_Y0;
+  int tx = cx + (int)(sinf(ang) * lenTip);
+  int ty = cy - (int)(cosf(ang) * lenTip);
+  int bx = cx - (int)(sinf(ang) * lenTail);
+  int by = cy + (int)(cosf(ang) * lenTail);
+  cbThickLine(bx, by, tx, ty, r + 3, glow);
+  cbThickLine(bx, by, tx, ty, r, core);
+  int ax = cx + (int)(sinf(ang) * (lenTip - 18));
+  int ay = cy - (int)(cosf(ang) * (lenTip - 18));
+  cbFillCircle(tx, ty, r + 5, glow);
+  cbFillCircle(ax, ay, r + 3, core);
+}
+
+void drawDiverClock(bool full){
+  static int lastTempInt = -999;
+  bool compose = (dialCached && dialBuf && clockBuf);
+
+  // TEST 055: the full-screen background is painted only when entering
+  // the screensaver, not once a second.
+  if (full || !compose) {
+    if (dialCached && dialBuf) {
+      gfx->draw16bitRGBBitmap(0, 0, dialBuf, SCREEN_W, SCREEN_H);
+    } else if (haveDial) {
+      if (!showPhoto(DIAL_FILE)) gfx->fillScreen(BLACK);
+    } else {
+      gfx->fillScreen(0x0842);
+    }
+    lastTempInt = -999;            // force the temperature back on screen
+  }
 
   long s = nowSecOfDay(); if (s<0) s=0;
   int hh=(s/3600)%12, mm=(s/60)%60, ss=s%60;
@@ -894,20 +1312,87 @@ void drawDiverClock(){
   const uint16_t GCORE=0x2586;   // TEST 043: green at ~70%
   const uint16_t GGLOW=0x0844;   // dimmer glow to match
 
-  // hour (short, thick), minute (long), second (thin bright)
-  drawHand((hh*30+mm*0.5f)*D, 22, 120, 7, GGLOW, GCORE);
-  drawHand((mm*6+ss*0.1f)*D,  26, 175, 5, GGLOW, GCORE);
-  // second hand: thinner, brighter, longer, red-ish tip
-  drawHand((ss*6)*D, 40, 195, 2, 0x1902, 0xA800);   // TEST 043: red at ~70%
+  if (compose) {
+    // TEST 055: rebuild the clock area off-screen - clean dial, then
+    // hands on top - and push the finished image in a single blit.
+    for (int y = 0; y < CLK_REG_H; y++) {
+      memcpy(&clockBuf[(size_t)y * CLK_REG_W],
+             &dialBuf[(size_t)(CLK_REG_Y0 + y) * SCREEN_W + CLK_REG_X0],
+             (size_t)CLK_REG_W * sizeof(uint16_t));
+    }
+    cbDrawHand((hh*30+mm*0.5f)*D, 22, 120, 7, GGLOW, GCORE);
+    cbDrawHand((mm*6+ss*0.1f)*D,  26, 175, 5, GGLOW, GCORE);
+    cbDrawHand((ss*6)*D,          40, 195, 2, 0x1902, 0xA800);
+    cbFillCircle(CLOCK_CX - CLK_REG_X0, CLOCK_CY - CLK_REG_Y0, 10, GCORE);
+    cbFillCircle(CLOCK_CX - CLK_REG_X0, CLOCK_CY - CLK_REG_Y0,  5, 0xFFFF);
+    gfx->draw16bitRGBBitmap(CLK_REG_X0, CLK_REG_Y0, clockBuf,
+                            CLK_REG_W, CLK_REG_H);
+  } else {
+    // fallback: straight to the screen, as TEST 054 did
+    drawHand((hh*30+mm*0.5f)*D, 22, 120, 7, GGLOW, GCORE);
+    drawHand((mm*6+ss*0.1f)*D,  26, 175, 5, GGLOW, GCORE);
+    drawHand((ss*6)*D, 40, 195, 2, 0x1902, 0xA800);
+    gfx->fillCircle(CLOCK_CX,CLOCK_CY,10,GCORE);
+    gfx->fillCircle(CLOCK_CX,CLOCK_CY,5,0xFFFF);
+  }
 
-  // center cap
-  gfx->fillCircle(400,240,10,GCORE);
-  gfx->fillCircle(400,240,5,0xFFFF);
+  // TEST 049: if the dial is not on screen, say why, on the screen.
+  if (full && !dialCached) {
+    gfx->setTextColor(0xFFE0, BLACK);
+    gfx->setTextSize(2);
+    gfx->setCursor(10, SCREEN_H - 26);
+    gfx->print(dialStatus);
+  }
 
-  // temperature (green) top-right
-  if (tempOK){ char t[16]; snprintf(t,sizeof(t),"%.1f C",gTemp);
-    gfx->setTextColor(0x37E9); gfx->setTextSize(3);
-    gfx->setCursor(600,20); gfx->print(t); }
+  // TEST 046: temperature in the right-hand margin, whole degrees,
+  // large enough to read from the bed without glasses.
+  // Character cell is 6*size wide by 8*size tall, so size 9 = 54 x 72 px.
+  if (tempOK) {
+    int tInt = (int)lroundf(gTemp);
+    if (tInt < -99) tInt = -99;
+    if (tInt >  99) tInt =  99;
+    // TEST 055: repaint only when the whole number actually changes.
+    if (tInt == lastTempInt) return;
+    lastTempInt = tInt;
+    gfx->fillRect(TEMP_CLR_X, TEMP_CLR_Y, TEMP_CLR_W, TEMP_CLR_H, BLACK);
+
+    char t[8]; snprintf(t, sizeof(t), "%d", tInt);
+
+    // Two digits get the big size; a three-character reading such as
+    // "-12" drops a size so the block stays the same overall width.
+    // TEST 051: real font. Offsets in temp_font.h are measured from the
+    // top of the digits (not the baseline - that overflowed int8_t), so
+    // the cursor y is the digit top. getTextBounds() handles either
+    // convention, so the placement maths below does not care.
+    int16_t bx, by, cxb, cyb;
+    uint16_t bw, bh, cw, chh;
+
+    gfx->setTextSize(1);
+    gfx->setFont(&TempBig);
+    gfx->getTextBounds(t, 0, 0, &bx, &by, &bw, &bh);
+    gfx->setFont(&TempSmall);
+    gfx->getTextBounds("C", 0, 0, &cxb, &cyb, &cw, &chh);
+
+    int blockW = (int)bw + TEMP_C_GAP + (int)cw;
+    int left   = TEMP_CX - blockW / 2;      // digits + gap + C, centred
+    int top    = CLOCK_CY - (int)bh / 2;    // level with the middle of the dial
+    if (left < 0) left = 0;
+    if (left + blockW > SCREEN_W) left = SCREEN_W - blockW;
+
+    gfx->setTextColor(0x37E9);              // no bg: the dial is redrawn anyway
+    gfx->setFont(&TempBig);
+    gfx->setCursor(left - bx, top - by);
+    gfx->print(t);
+
+    // C to the RIGHT of the digits, sharing their bottom line
+    gfx->setFont(&TempSmall);
+    gfx->setCursor(left + (int)bw + TEMP_C_GAP - cxb,
+                   top + (int)bh - (int)chh - cyb);
+    gfx->print("C");
+
+    gfx->setFont(NULL);                     // back to the built-in font
+    gfx->setTextSize(1);
+  }
 }
 
 // ============================================================
@@ -1009,7 +1494,7 @@ void updateAnalog() {
   setHand(anaHour, hourPts, (hh*30 + mm*0.5f) * D, ANA_R - 115);
   setHand(anaMin,  minPts,  (mm*6 + ss*0.1f)  * D, ANA_R - 45);
   setHand(anaSec,  secPts,  (ss*6)            * D, ANA_R - 30);
-  if (tempOK) { char t[16]; snprintf(t, sizeof(t), "%.1f C", gTemp); lv_label_set_text(anaTemp, t); }
+  if (tempOK) { char t[16]; snprintf(t, sizeof(t), "%d C", (int)lroundf(gTemp)); lv_label_set_text(anaTemp, t); }
   else lv_label_set_text(anaTemp, "");
 }
 
@@ -1057,7 +1542,7 @@ void updateClockFace() {
   } else snprintf(buf, sizeof(buf), "--:--");
   lv_label_set_text(clkMain, buf);
   lv_label_set_text(clkGlow, buf);
-  if (tempOK) { char t[16]; snprintf(t, sizeof(t), "%.1f C", gTemp); lv_label_set_text(clkTemp, t); }
+  if (tempOK) { char t[16]; snprintf(t, sizeof(t), "%d C", (int)lroundf(gTemp)); lv_label_set_text(clkTemp, t); }
   else lv_label_set_text(clkTemp, "");
 }
 
@@ -1081,6 +1566,8 @@ void buildSettings() {
   lv_obj_t *tMass  = lv_tabview_add_tab(tv, "Massage");
   lv_obj_t *tFiles = lv_tabview_add_tab(tv, "Files");
   lv_obj_t *tAbout = lv_tabview_add_tab(tv, "About");
+  // TEST 047: Clock 0, Display 1, Massage 2, Files 3, About 4
+  lv_obj_add_event_cb(tv, evSettingsTab, LV_EVENT_VALUE_CHANGED, NULL);
 
   // ---- Clock ----
 
@@ -1104,7 +1591,7 @@ void buildSettings() {
 
   lblSetH = lv_label_create(row); lv_label_set_text(lblSetH, "12");
   lv_obj_set_style_text_font(lblSetH, &lv_font_montserrat_40, 0);
-  lv_obj_set_style_text_color(lblSetH, lv_color_hex(0xBFEFFF), 0);
+  lv_obj_set_style_text_color(lblSetH, lv_color_hex(SET_TEXT_COL), 0);
 
   lv_obj_t *bHu = lv_btn_create(row); lv_obj_set_size(bHu, 64, 64);
   lv_obj_add_event_cb(bHu, evHourUp, LV_EVENT_CLICKED, NULL);
@@ -1113,7 +1600,7 @@ void buildSettings() {
 
   lv_obj_t *cln = lv_label_create(row); lv_label_set_text(cln, ":");
   lv_obj_set_style_text_font(cln, &lv_font_montserrat_40, 0);
-  lv_obj_set_style_text_color(cln, lv_color_hex(0xBFEFFF), 0);
+  lv_obj_set_style_text_color(cln, lv_color_hex(SET_TEXT_COL), 0);
 
   lv_obj_t *bMd = lv_btn_create(row); lv_obj_set_size(bMd, 64, 64);
   lv_obj_add_event_cb(bMd, evMinDn, LV_EVENT_CLICKED, NULL);
@@ -1122,7 +1609,7 @@ void buildSettings() {
 
   lblSetM = lv_label_create(row); lv_label_set_text(lblSetM, "00");
   lv_obj_set_style_text_font(lblSetM, &lv_font_montserrat_40, 0);
-  lv_obj_set_style_text_color(lblSetM, lv_color_hex(0xBFEFFF), 0);
+  lv_obj_set_style_text_color(lblSetM, lv_color_hex(SET_TEXT_COL), 0);
 
   lv_obj_t *bMu = lv_btn_create(row); lv_obj_set_size(bMu, 64, 64);
   lv_obj_add_event_cb(bMu, evMinUp, LV_EVENT_CLICKED, NULL);
@@ -1197,7 +1684,9 @@ void buildSettings() {
   fileList = lv_list_create(tFiles);
   lv_obj_set_size(fileList, 760, 290);
   lv_obj_align(fileList, LV_ALIGN_TOP_MID, 0, 0);
-  populateFiles(fileList);
+  // TEST 047: NOT populated here. Building ~42 list buttons at boot is what
+  // exhausted LVGL's heap and crashed. evSettingsTab fills it on demand.
+  lv_list_add_text(fileList, "Open this tab to list the card");
 
   // TEST 041: slideshow of every photo in /photos, 2 s each, touch to stop
   lv_obj_t *slb = lv_btn_create(tFiles);
@@ -1386,7 +1875,7 @@ void drawColon(bool on){
 void drawSaverTemp(){
   gfx->fillRect(SCREEN_W-260, 0, 260, 80, BLACK);
   if (tempOK) {
-    char v[16]; snprintf(v, sizeof(v), "%.1fC", gTemp);
+    char v[16]; snprintf(v, sizeof(v), "%dC", (int)lroundf(gTemp));
     gfx->setTextColor(0x7BEF); gfx->setTextSize(8);   // ~0.75cm digits
     gfx->setCursor(SCREEN_W-250, 8); gfx->print(v);
   }
@@ -1420,7 +1909,7 @@ void pollSerialCommands(){
           timeSet = true;
           if (haveDS3231) { ds3231SetHM(hh, mm); Serial.printf("DS3231 + clock set to %02d:%02d\n", hh, mm); }
           else Serial.printf("clock set to %02d:%02d (no DS3231; will reset on power-off)\n", hh, mm);
-          if (state == ST_SAVER) drawDiverClock();
+          if (state == ST_SAVER) drawDiverClock(true);
         } else Serial.println("usage: time HH:MM");
       }
       conBuf = "";
@@ -1435,7 +1924,7 @@ void enterSaver() {
   state = ST_SAVER;
   lv_scr_load(scrBlank);      // hide LVGL widgets
   lv_refr_now(NULL);
-  drawDiverClock();
+  drawDiverClock(true);       // TEST 055: full paint on entry
 }
 void exitSaver() {
   state = ST_UI;
@@ -1457,11 +1946,28 @@ void setup() {
   gfx->fillScreen(BLACK);
   setupBacklight();
 
+  bool sd = false;
+#if ENABLE_SD
   SPI.begin(SD_CLK, SD_MISO, SD_MOSI, SD_CS);
-  bool sd = SD.begin(SD_CS, SPI);
+  sd = SD.begin(SD_CS, SPI);
   if (sd && showPhoto(WELCOME_FILE)) delay(WELCOME_MS);
   if (sd) scanPhotos();
   if (sd) { File df=SD.open(DIAL_FILE); haveDial = (bool)df; if(df) df.close(); }
+  Serial.printf("dial: haveDial=%s\n", haveDial ? "yes" : "NO");
+#else
+  // TEST 053: SPI is never started. GPIO 11/12/13 stay free for the
+  // microphone, and the SD card is never selected.
+  Serial.println("SD: disabled - GPIO 11/12/13 belong to the I2S microphone");
+  (void)sd;
+#endif
+  cacheDial();                       // TEST 046: decode once, reuse forever
+  micBegin();                        // TEST 054: microphone
+
+  // TEST 055: off-screen compose buffer for a flicker-free screensaver
+  clockBuf = (uint16_t *)ps_malloc((size_t)CLK_REG_W * CLK_REG_H * sizeof(uint16_t));
+  Serial.printf("clock buffer: %s (%d bytes)\n",
+                clockBuf ? "ok" : "FAILED - falling back to full repaint",
+                (int)((size_t)CLK_REG_W * CLK_REG_H * sizeof(uint16_t)));
 
   i2cScan();
   gt911Probe();
@@ -1522,6 +2028,19 @@ void loop() {
       if (haveBME280) tempOK = bme280Read(gTemp, gHum, gPress);
       computeTargetFromLux();
       updateSensorLabel();
+      // TEST 054: one line a second, so a silent mic is obvious
+      if (micReady)
+        Serial.printf("mic: rms %.4f  peak %.4f  reads %u\n",
+                      micRms, micPeak, (unsigned)micReads);
+    }
+
+    // TEST 054: pull audio every pass and show the level
+    if (micRead() && micBar) {
+      int pct = (int)(micRms * 400.0f);        // x4 so speech is visible
+      if (pct > 100) pct = 100;
+      lv_bar_set_value(micBar, pct, LV_ANIM_OFF);
+      if (micLbl)
+        lv_label_set_text_fmt(micLbl, "mic %d%%", pct);
     }
     if (millis() - lastEaseMs > 25) { lastEaseMs = millis(); easeBacklight(); }
 
@@ -1581,7 +2100,7 @@ void loop() {
 }
 
 /* ============================================================
- *                        TEST  045   (end of file)
+ *                        TEST  055   (end of file)
  * ============================================================
  *  Panel - Stage 3 - rebuild of the lost 041-044 on top of 040
  *
