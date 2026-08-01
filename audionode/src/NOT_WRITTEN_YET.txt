@@ -1,4 +1,0 @@
-Audio node firmware not written yet.
-
-Next step: TEST 001 - bring Ethernet up, print the IP, listen on UART id 9,
-play one hardcoded station through the PCM5102A.
