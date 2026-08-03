@@ -1,8 +1,8 @@
 # Adjustable Bed Massage Retrofit — Project Handout
 
-**Revision 7 — 31 July 2026**
-Supersedes Rev 6 (same day, earlier). Self-contained: this document alone
-should let a future session pick up without re-learning the project.
+**Revision 9 — 2 August 2026**
+Supersedes Rev 8 (1 August). Self-contained: this document alone should let a
+future session pick up without re-learning the project.
 
 ---
 
@@ -11,11 +11,11 @@ should let a future session pick up without re-learning the project.
 A DIY smart bedside system for two adjustable beds shared by Shemtov (Shemi)
 and Ira, in Petah Tikva, Israel. One central touch panel on the headboard
 controls vibration massage on both beds, plus a clock face with environmental
-sensors, and later voice control, internet radio and AC control.
+sensors, voice control, and internet radio through a soundbar.
 
 **Governing rule: zero RF at the heads.** No WiFi, Bluetooth or ESP-NOW near
-the sleeping positions. All inter-device communication is wired UART. Only a
-future audio node will have a radio, and it lives away from both heads.
+the sleeping positions. All inter-device communication is wired UART. Only the
+audio node has a radio, and it lives away from both heads.
 
 ---
 
@@ -29,357 +29,350 @@ Bg_Bed/
 ├── panel/
 │   ├── platformio.ini
 │   ├── include/
-│   │   ├── temp_font.h      TEST 050+ — screensaver temperature font
-│   │   └── dial_image.h     TEST 053+ — the dial, embedded in flash
-│   └── src/main.cpp         TEST 055
+│   │   ├── temp_font.h      screensaver temperature font
+│   │   └── dial_image.h     the dial, embedded in flash
+│   └── src/main.cpp         TEST 062
 ├── bedbox/     platformio.ini, src/main.cpp (TEST 007 — NOT the latest)
-├── audionode/  not started
+├── audionode/  platformio.ini, src/main.cpp (TEST 004)
 ├── .gitignore
 └── Handout.md
 ```
 
-**Working loop:** edit in VS Code → save → GitHub Desktop → write a summary →
-`Commit to main` → `Push origin`.
+Separate, deliberately outside the repo:
+`C:\projects\blinktest\` — a minimal LED test used to prove a board runs at
+all. Kept out of `Bg_Bed` because it was accidentally written over the audio
+node once already.
+
+**⚠ THE WIFI PASSWORD IS IN A PUBLIC REPO.** `audionode/src/main.cpp` holds
+`WIFI_SSID` and `WIFI_PASS` as plain defines. Anyone can read them once
+pushed. Change the WiFi password, and consider moving credentials to a file
+listed in `.gitignore`.
 
 **Conventions**
-- Filenames never carry version numbers. The code file is always
-  `src/main.cpp`. The version lives in `#define TEST_NUMBER n` inside the
-  file, in the banner top and bottom, and in the boot print.
+- Filenames never carry version numbers. The code file is always `src/main.cpp`.
+- `#define TEST_NUMBER n` inside the file. **The test number appears in the
+  first three lines AND the last three lines of every file.** Bumped on every
+  change, no exceptions.
+- Every deliverable is the **whole file**, ready to copy and paste. Never a
+  diff, never "change this one line".
 - Version numbers go in commit messages, not filenames.
 - Never put decorative equal-sign border lines inside code or `.ini` files.
 - `.pio/` is never committed.
-- Each of `panel/`, `bedbox/`, `audionode/` is a separate PlatformIO project.
-  Open that folder in VS Code — never the repository root.
-- Every firmware deliverable is the whole program as one complete file.
-
-**Loose files still in `panel/`:** `microphone.cpp`, `microphone.h` and a
-legacy `config.h`. PlatformIO only compiles `src/`, so none are built. The
-microphone pair has now been superseded — its logic was rewritten directly
-into `main.cpp` at TEST 054, with four bugs fixed (see §9). They can be
-deleted. `config.h` is from the abandoned Waveshare/ESP-NOW design and must
-never be `#include`d: it defines `TEST_NUMBER 2`, which would collide.
+- Each project folder is opened separately in VS Code — never the repo root.
 
 ---
 
-## 3. Panel
+## 3. Panel — WORKING
 
 **Hardware:** Guition ESP32-8048S043 — ESP32-S3-WROOM-1 N16R8, 16MB flash,
 8MB octal PSRAM, 4.3" 800×480 IPS parallel RGB (ST7262), GT911 touch.
 
-### THE PIN BUDGET — read this before adding any peripheral
+### The pin budget — read before adding any peripheral
 
-The board exposes **only seven GPIOs**, across four headers:
-
-| Header | Pins |
-|---|---|
-| P2 (SPI) | IO11, IO12, IO13, IO19 |
-| P3 (USB/UART) | IO17, IO18, IO19, IO20 |
-| P4 | IO17, IO18, +3.3V, GND |
-| P1 (UART) | UART0 Rx/Tx, +5V, GND |
-
-Every one is committed. IO35/36/37 are consumed by the octal PSRAM. The
-GT911 touch controller is hard-wired to IO19/IO20 on the PCB and cannot
-move. **There is no free pin.** Any new peripheral must displace something
-or live on another board.
+Seven exposed GPIOs total: IO11, IO12, IO13, IO17, IO18, IO19, IO20. Every one
+is committed. IO35/36/37 go to the octal PSRAM. The GT911 touch controller is
+hard-wired to IO19/IO20 and cannot move. **There is no free pin.**
 
 | Function | Pins / address |
 |---|---|
-| I2C bus | SDA = IO19, SCL = IO20 |
-| BH1750 ambient light | 0x23 — present |
-| GT911 touch | 0x5D — present |
-| BMP280 temp + **pressure** | 0x76 — present (no humidity) |
-| DS3231 RTC | 0x68 — **absent, not yet bought** |
-| **INMP441 microphone (I2S0)** | **DIN=IO11, BCK=IO12, WS=IO13** |
-| SD card (SPI) | **DISABLED** — same pins as the microphone |
-| Backlight | GPIO2, LEDC channel 7, 5 kHz, 8-bit |
-| UART1 → bed box | TX = IO17, RX = IO18 @ 115200, via P3 header |
-| USB / serial monitor | UART0, 115200 |
+| I2C | SDA = IO19, SCL = IO20 |
+| BH1750 ambient light | 0x23 |
+| **SHT31 temperature + humidity** | **0x44 — NEW, the temperature source** |
+| AT24C32 EEPROM (on the RTC board) | 0x57 — present, unused |
+| GT911 touch | 0x5D |
+| **DS3231 real-time clock** | **0x68 — NEW, battery-backed** |
+| BMP280 temperature + pressure | 0x76 — now used for PRESSURE only |
+| INMP441 microphone (I2S0) | DIN=IO11, BCK=IO12, WS=IO13 |
+| SD card | **DISABLED** — shares the microphone's pins |
+| Backlight | GPIO2, LEDC ch7, 5 kHz, 8-bit |
+| UART1 → bed box | TX=IO17, RX=IO18 @ 115200 (P3 header) |
+
+All five I2C devices confirmed responding in the boot scan. No new pins were
+needed — that is the point of I2C, and it matters on a board with none free.
+
+**The DS3231 module** is the compact type with a CR1220 already fitted, not the
+ZS-042 that tries to charge a non-rechargeable cell. No modification needed.
+It carries an AT24C32 EEPROM at 0x57, which is harmless and could be useful
+storage later.
+
+**The SHT31** is written with raw `Wire` calls in the same style as the BMP280
+driver, so no new library was added.
+
+**Mount the SHT31 away from the display board.** The panel electronics
+self-heat a degree or two; a sensor glued behind the screen reads the panel,
+not the room.
 
 ### platformio.ini — do not change casually
 
+`platform = espressif32 @ 6.9.0` is mandatory (unpinned gives Arduino core
+3.2.0, which removed `ledcSetup`, and GFX 1.3.8 will not build against ESP-IDF
+5.4). Both `board_build.*` and `board_upload.*` flash-size lines are mandatory.
+`-DLV_CONF_SKIP` means **no `lv_conf.h` anywhere**. `-DLV_MEM_SIZE=65536` is
+required or the Files tab crashes at boot. Libraries: GFX 1.3.8, JPEGDEC,
+LVGL ^8.3.11.
+
+### Firmware — TEST 062, runs on hardware
+
+Voice recognition works, tuned on measured data:
+
+- **Utterance detection** with an adaptive noise floor and a 250 ms pre-roll
+  ring buffer, so the start of the word is not lost.
+- **MFCC + DTW** — 12 cepstral coefficients, cepstral mean normalisation,
+  dynamic time warping normalised by path length.
+- **Three reference slots**, learned from a button on the home screen.
+- **Measured separation:** 10 repeats of the wake word scored 5.91–8.36; six
+  other words scored 13.02–23.86. No overlap. `WAKE_THRESHOLD` is 10.5.
+  Replayed through the decision logic: 10/10 true accepted, 0/6 false.
+- A duration gate rejects anything outside 0.5×–1.7× of the learned lengths
+  before the DTW even runs.
+- The microphone runs in **every** state, so the wake word works while the
+  screensaver is on, and a detection wakes the screen.
+
+**In practice it is intermittent** — it recognises sometimes and not others,
+notably in the morning. That is DTW behaving as designed: templates are
+speaker- and condition-specific. See §7 for the plan.
+
+Screensaver is flicker-free: the dial is decoded once into PSRAM, a 424×424
+region is composed off-screen with the hands drawn into it, and blitted once.
+PSRAM total ≈1.3 MB of 8 MB.
+
+**New in TEST 062**
+
+- **Humidity at last.** The panel never showed it because the BMP280 does not
+  measure humidity. The SHT31 now supplies temperature and humidity; the
+  BMP280 is kept for pressure and its trend.
+- **The pressure arrow now works.** It never appeared, and that was a design
+  fault rather than a bug: `pressTrend` only changed inside a block gated on
+  30 minutes of uptime, so every reboot reset it to a dash and half an hour
+  was needed before it could move at all — and it then wanted a 0.3 hPa swing,
+  which is a real weather change. Now the first reference is taken on the
+  first reading, the window is 10 minutes, the threshold 0.1 hPa, and the
+  **pressure value itself is displayed**, so the reading says something even
+  when the trend is steady.
+- **The clock survives power cuts.** The DS3231 code was already written in
+  TEST 061 in anticipation; the chip simply had not arrived. `time HH:MM` now
+  writes to the RTC as well as the running clock.
+- Two new serial commands: `sensors` prints every reading and which chips
+  answered, `trend` forces a pressure recalculation instead of waiting.
+
+---
+
+## 4. Bed box — UNCHANGED, STILL THE OLDEST OPEN ITEM
+
+**Hardware:** QuinLED-ESP32 (WROOM-32E), 8× 12V ERM motors via 4× L298N.
+Motor PWM pins 13,14,18,19,21,22,23,25. Four zones × 2 motors: Head,
+Shoulders, Back, Legs. `MIN_DUTY_BIG = 165`, `MIN_DUTY_SMALL = 60`. PWM 20 kHz
+8-bit, with a 60 ms full-duty kick-start. UART2 RX=GPIO16 TX=GPIO17 @115200,
+crossed to the panel, ground shared, **5V never connected**.
+
+**Protocol, 4 bytes:** `{bedId, cmd, target, value}` — bedId 0 both / 1 Shemi /
+2 Ira; cmd 0 OFF, 1 ALL, 2 ZONE, 3 MOTOR, 4 PRESET, 5 TIMER.
+
+**What is in the repo is not the latest.** `bedbox/src/main.cpp` is TEST 007, a
+standalone motor demo that does not listen to the panel — which is why massage
+taps still do nothing. **TEST 0014**, the UART receiver, was written 22 July
+and never committed. It is in the chat "Bed door project",
+`claude.ai/chat/c5d478a6-4aec-4178-89f9-9e7918bb4c8c`. Chat attachments expire.
+If lost, rebuilding is ~20 lines on top of TEST 007's existing
+`handleMessage()`.
+
+---
+
+## 5. Audio node — firmware proven, hardware is a dead end
+
+### Design intent
+
+WT32-ETH01 (wired Ethernet, no radio near the heads) + PCM5102A I2S DAC →
+3.5mm → analog-to-TOSLINK converter → optical → Klipsch FLEXUS CORE 100.
+The WT32-ETH01 and the TOSLINK converter are both still in transit.
+
+### What was actually built
+
+Bring-up was attempted on a spare **ESP32-CAM (AI-Thinker)** with its USB
+motherboard, because it was the only spare board on hand.
+
+```
+PCM5102A        ESP32-CAM
+VIN     ....... 5V
+GND     ....... GND
+SCK     ....... GND      <-- MUST be grounded, or silence
+BCK     ....... GPIO14
+LCK     ....... GPIO2    (was 15 — a strapping pin)
+DIN     ....... GPIO13
+```
+
+**TEST 004** — internet radio with a web control page. Stations, volume,
+now-playing, plus channel diagnostics (I2S format toggle, forced mono,
+balance). Web page exists because the board only runs on battery, where there
+is no serial console.
+
+### It worked, briefly, and that is the important part
+
+On battery power the full chain ran:
+
+```
+connect to: "ice1.somafm.com" on port 80
+Connection has been established in 921 ms
+MP3Decoder has been initialized
+Channels: 2   SampleRate: 44100   BitsPerSample: 16
+now playing  Fascinating Earthbound Objects - Charm
+```
+
+Sound came out of the headphones. **The firmware, the library, the streaming
+and the DAC are all proven.**
+
+### Why the ESP32-CAM is being abandoned
+
+1. **It browns out.** With WiFi and I2S both running the supply collapses —
+   on PC USB the device drops off the bus mid-stream. The DAC's power LED goes
+   dark at the same instant, confirming the whole rail sags, and the board
+   crash-loops inside I2S init.
+2. **Every free pin is compromised.** Only 10 GPIOs are exposed and all are
+   strapping pins or SD pins.
+3. **Serial fights the monitor** — see §9.
+4. **Sound came out of one channel only**, and reseating LCK did not fix it.
+   TEST 004 has the tools to chase it (format/mono/balance) but the board
+   never stayed up long enough to work through them.
+
+**Conclusion: stop. Move to the WT32-ETH01 when it arrives.** The same code
+transfers; only the network initialisation changes.
+
+### Station URLs — found and recorded
+
+Extracted from the `data-player-hls-src` attribute in kan.org.il page source
+(view-source, Ctrl+F for `m3u8` — the URL is not visible in the rendered page):
+
+| Station | ID | Colour | Stream |
+|---|---|---|---|
+| Kan 88 | 4504 | `#8c24ff` | `https://kancdn.medonecdn.net/livehls/oil/kancdn-live/live/radio/kan_88/live.livx/playlist.m3u8` |
+| Kan Gimel | 4490 | `#ff931e` | `https://kancdn.medonecdn.net/livehls/oil/kancdn-live/live/radio/kan_gimel/live.livx/playlist.m3u8` |
+
+Other Kan stations follow the same pattern with a different name segment.
+Reshet Bet is 4483, Kol HaMusica 4518. These are HLS; ESP32-audioI2S handles
+`.m3u8` natively.
+
+### audionode/platformio.ini — three non-obvious lines
+
 ```ini
-[env:panel]
-platform = espressif32 @ 6.9.0
-board = esp32-s3-devkitc-1
-framework = arduino
-monitor_speed = 115200
-monitor_filters = esp32_exception_decoder
-
-board_build.arduino.memory_type = qio_opi
-board_build.flash_mode = qio
-board_build.psram_type = opi
-board_build.flash_size = 16MB
-board_build.partitions = default_16MB.csv
-board_upload.flash_size = 16MB
-board_upload.maximum_size = 16777216
-
-build_flags =
-  -DBOARD_HAS_PSRAM
-  -DARDUINO_USB_CDC_ON_BOOT=0
-  -DLV_CONF_SKIP
-  -DLV_COLOR_DEPTH=16
-  -DLV_TICK_CUSTOM=1
-  -DLV_MEM_SIZE=65536
-  -DLV_FONT_MONTSERRAT_20=1
-  -DLV_FONT_MONTSERRAT_28=1
-  -DLV_FONT_MONTSERRAT_40=1
-
+platform = espressif32                     ; unpinned ON PURPOSE, see below
+board = esp32cam
+monitor_rts = 0                            ; or the monitor kills the board
+monitor_dtr = 0
 lib_deps =
-  moononournation/GFX Library for Arduino @ 1.3.8
-  bitbank2/JPEGDEC @ ^1.2.8
-  lvgl/lvgl @ ^8.3.11
+  https://github.com/schreibfaul1/ESP32-audioI2S.git#3.4.0
 ```
 
-1. **`@ 6.9.0` is mandatory.** Unpinned, `espressif32` resolves to 54.3.20 on
-   this machine (Arduino core 3.2.0), which removed `ledcSetup()` and
-   `ledcAttachPin()`, and GFX 1.3.8 will not compile against its ESP-IDF 5.4
-   headers.
-2. **The `board_upload.*` lines are mandatory.** With only the build side set,
-   the bootloader believed the chip was the 8MB no-PSRAM N8 variant and reset
-   forever — black screen, no serial at all, `rst:0x3 RTC_SW_SYS_RST`.
-3. **`LV_CONF_SKIP`** means LVGL is configured entirely by build flags. **No
-   `lv_conf.h` is needed anywhere.** The `lv_conf.h.FROM_TEST1_CHECK_T…`
-   placeholder in `include/` is unused and can be deleted.
-4. **`LV_MEM_SIZE=65536`** added at TEST 047. Without it LVGL defaults to a
-   32 KB heap — see §9.
-
-### Panel firmware — TEST 055
-
-Runs on hardware. History since Rev 6:
-
-| Test | Change |
-|---|---|
-| 046 | Dial decoded once into PSRAM instead of re-read from SD every second; big whole-degree temperature; boot prints dial status |
-| 047 | **Fixed the boot crash.** Files list no longer built at boot; LVGL memory guard; row cap; `LV_MEM_SIZE` raised |
-| 048 | Clock face moved left (`CLOCK_CX`/`CLOCK_CY`); temperature enlarged into the freed space |
-| 049 | Temperature smaller, C moved to its right on the same bottom line; dial buffer cleared before decode; decode block counter; failures reported on screen |
-| 050 | Temperature drawn with a real TrueType-derived GFX font (`temp_font.h`) instead of the 5×7 bitmap scaled 20× |
-| 051 | `temp_font.h` regenerated — 050 would not compile (see §9) |
-| 052 | Settings → Clock hour/colon/minute changed to black; they were invisible on LVGL's light-theme tab page |
-| 053 | **SD card retired**, dial moved into flash (`dial_image.h`) |
-| 054 | **INMP441 microphone** — capture, RMS/peak, level meter on Home |
-| 055 | **Screensaver flicker fixed** — off-screen composition |
-
-### Screensaver architecture (TEST 055)
-
-- The dial is a 16921-byte baseline 4:2:0 JPEG compiled into flash as
-  `dial_image.h`. At boot it is decoded once into a 768 KB PSRAM buffer.
-- Each tick, a 424×424 PSRAM buffer covering the clock face is filled from
-  the cached dial, the hands are rasterised **into that buffer**, and the
-  finished image is blitted **once**. The screen never holds a half-drawn
-  frame — this is what removed the 1 Hz flicker.
-- The full screen is painted only on entering the screensaver.
-- The temperature is repainted only when the whole number changes.
-- PSRAM total: dial 768 KB + compose 360 KB + LVGL 96 KB ≈ 1.22 MB of 8 MB.
-
-`CLOCK_CX`/`CLOCK_CY` (240,240) must match the dial artwork, which is centred
-on x=239. Changing one without the other puts the hands off the face.
-
-### Microphone (TEST 054)
-
-INMP441 on I2S0. VDD→3.3V, GND→GND, **L/R→GND** (left channel), SD→IO11,
-SCK→IO12, WS→IO13.
-
-`ENABLE_MIC 1` and `ENABLE_SD 0` at the top of `main.cpp`. They share pins
-and are mutually exclusive; `micBegin()` refuses to start if both are 1.
-
-**Status: capture works.** A level bar sits along the bottom of the Home
-screen and serial prints `mic: rms … peak … reads …` once a second.
-**There is no keyword recognition yet** — that is the next real project.
+- **Unpinned platform**: the panel's `@ 6.9.0` pin exists for GFX Library and
+  does not apply here. ESP32-audioI2S 3.x wants Arduino core 3.x.
+- **Library pinned to 3.4.0**: unpinned fetches 3.4.7, which calls
+  `dsps_biquad_sf32()` from a newer esp-dsp than the platform ships and fails
+  to build. Versions 3.1.0–3.4.0 do not call it.
+- **3.4.0 uses the OLD callback style** — free functions `audio_info()`,
+  `audio_showstation()`, `audio_showstreamtitle()` — not the `Audio::msg_t`
+  struct of 3.4.7. Pinning the library without matching the callbacks costs a
+  build cycle.
+- The library **requires PSRAM** and a multi-core chip.
 
 ---
 
-## 4. Bed box — UNCHANGED, AND STILL THE OLDEST OPEN ITEM
+## 6. Voice recognition — the plan
 
-**Hardware:** QuinLED-ESP32 (WROOM-32E), 8× 12V ERM vibration motors via
-4× L298N H-bridges, 12V supply separate from the panel.
+DTW template matching works but is speaker- and condition-dependent, which is
+why recognition is intermittent. Switching the wake word to **English** opens
+the door to pre-trained models that Hebrew never had.
 
-- Motor PWM pins: GPIO 13, 14, 18, 19, 21, 22, 23, 25
-- 4 zones × 2 motors: Head, Shoulders, Back, Legs
-- `MIN_DUTY_BIG = 165`, `MIN_DUTY_SMALL = 60`; PWM 20 kHz, 8-bit
-- 60 ms full-duty kick-start breaks the motors loose from rest
-- UART2 to panel: RX = GPIO16, TX = GPIO17 @ 115200
+**Decision: ESP-SR on a dedicated ESP32-S3.**
 
-| Panel P3 | → | QuinLED |
-|---|---|---|
-| IO17 (TX) | → | GPIO16 (RX) |
-| IO18 (RX) | → | GPIO17 (TX) |
-| GND | → | GND |
+- **English MultiNet does not exist for the classic ESP32** — the table in the
+  esp-sr repository has an empty cell. It requires ESP32-S3 (or P4). This rules
+  out the WT32-ETH01 for speech.
+- Free pre-trained English wake words include Computer, Jarvis, Sophia,
+  Astrolabe, Hey Wand, Hi Joy, Mycroft, Hey Willow. Trained on thousands of
+  speakers, so they work for Shemi, Ira **and a guest** — which DTW cannot.
+- **MultiNet supports up to 300 English commands** with custom commands added
+  without retraining. That is the real goal: "volume up", "stop", "shoulders
+  harder", spoken naturally.
+- ESP-SR is an **ESP-IDF component**, not Arduino. That is the learning curve,
+  and it is accepted deliberately.
 
-Crossed: TX goes to RX. **Each board on its own USB. Do NOT connect 5V** —
-ground only.
+**Hardware to buy: ESP32-S3-DevKitC-1 N16R8** (16MB flash, 8MB PSRAM), ~$8–12
+on AliExpress. Must be N16R8 — N8R2 has only 2MB PSRAM, N4/N8 have none.
+Plus a second INMP441.
 
-### Command protocol — 4 bytes
+**Steps:** 1 blank IDF project printing hello → 2 I2S mic under IDF →
+3 wake word only → 4 MultiNet commands → 5 UART to the panel → 6 real
+vocabulary → 7 give the panel its SD card back.
 
-`{bedId, cmd, target, value}`
-
-| Byte | Meaning |
-|---|---|
-| 0 | bedId — 0 both, 1 Shemi, 2 Ira |
-| 1 | cmd — 0 OFF, 1 ALL, 2 ZONE, 3 MOTOR, 4 PRESET, 5 TIMER |
-| 2 | target — zone id, motor index, or preset number |
-| 3 | value — intensity 0–100, or minutes |
-
-### WHAT IS IN THE REPO IS NOT THE LATEST
-
-`bedbox/src/main.cpp` holds **TEST 007**: a standalone motor demo with a
-serial console. It does **not** listen to the panel, which is why massage
-taps still do nothing.
-
-**TEST 0014 exists** — the UART receiver, written and uploaded 22 July,
-never committed. It is in the chat **"Bed door project"**,
-`claude.ai/chat/c5d478a6-4aec-4178-89f9-9e7918bb4c8c`
-
-**Chat attachments expire — that is exactly how TEST 044 was lost.** If it
-has already gone, rebuilding is straightforward: TEST 007 already contains
-`handleMessage(bedId, cmd, target, value)` with all six commands. The
-receiver is that plus roughly twenty lines — open `Serial2` on RX=16/TX=17
-at 115200, collect four bytes, call the existing function.
-
-### bedbox platformio.ini
-
-```ini
-[env:bedbox]
-platform = espressif32
-board = esp32dev
-framework = arduino
-monitor_speed = 115200
-upload_speed = 921600
-```
-
-`board = esp32-wroom-32` is rejected; `lib_deps = arduino-esp32/ESP32 @
-^2.0.14` must not be present; use Arduino `ledcSetup`/`ledcAttachPin`/
-`ledcWrite`, never a raw `driver/ledc.h` include.
-
-**Untested warning:** the bed box uses the core 2.x LEDC API, and an
-unpinned `platform = espressif32` resolves to core 3.2.0 where those
-functions do not exist. Expect `'ledcSetup' was not declared in this scope`;
-if so add `platform = espressif32 @ 6.9.0` as the panel has.
+Boards already ruled out: the ESP32-CAM (soldered to a camera in another
+project, and unsuitable anyway) and the spare Waveshare ESP32-S3-Touch-LCD-4.3
+(its headers are dedicated RS-485/CAN/I2C/AD ports, not free GPIO — a 4.3"
+RGB panel consumes almost every pin).
 
 ---
 
-## 5. SD card — retired, not removed
-
-`ENABLE_SD 0` in `main.cpp`. `SPI.begin()` and `SD.begin()` are never called,
-so CS is never asserted, the card holds its data line high-impedance, and the
-microphone owns IO11/12/13 with no contention. The card can be left in the
-slot or taken out; nothing reads it.
-
-**Lost while disabled:** the photo slideshow, the Files browser, and the
-welcome photo.
-
-**To bring it back** (when the microphone moves to another board): set
-`ENABLE_SD 1` and `ENABLE_MIC 0`. The code was guarded, not deleted.
-
-The card still holds `welcome_800x480.jpg`, `diver_dial.jpg`,
-`elevoc_dnn_kernel` and `/photos/pic1…pic38.jpg`. **The card remains the only
-copy of those photos** — the repo-visibility decision is still open, since
-`Bg_Bed` is public and the pictures are personal.
-
----
-
-## 6. Panel UI
-
-**State machine:** Home → *(idle)* → diver-clock screensaver → *(touch)* →
-Home. The welcome photo is skipped while SD is disabled.
-
-**Home:** icon tiles Massage / Radio / AC / Settings, temperature with
-pressure trend top-right, `TEST 055` badge, **microphone level bar along the
-bottom**.
-
-**Massage:** bed selector — Shemi (blue), Ira (red), Both (green); 4 zone
-sliders; intensity 0–100; presets including Random with a character setting.
-
-**Settings tabs:** Clock (+/− hour, minute, AM/PM, `Set Time`) · Display
-(min brightness 30–100, screensaver timeout) · Massage (MIN_DUTY sliders,
-random character) · Files (says SD is disabled) · About.
-
-All settings persist in flash via Preferences. Serial command `time HH:MM`.
-
-**Note on colours:** `LV_CONF_SKIP` leaves `LV_THEME_DEFAULT_DARK` at 0, so
-LVGL renders its **light** theme — tab pages are near-white. Pale text
-vanishes there. Fixed for the clock setter (`SET_TEXT_COL`); the About text
-(`0x90C0E0`) and the massage note (`0x7B90A0`) still have the same problem.
-Adding `-DLV_THEME_DEFAULT_DARK=1` would fix all of it at once but repaints
-every screen.
-
----
-
-## 7. Generated assets
-
-Both are produced from scripts and can be regenerated on request.
-
-**`include/temp_font.h`** — screensaver temperature font, from Noto Sans Bold
-outlines. Digits 150 px, C 46 px, about 27 KB of flash. Covers `-`, `0`–`9`
-and `C` only.
-
-**`include/dial_image.h`** — the dial, 800×480 baseline JPEG, 4:2:0, 16921
-bytes. Generated as an original drawing, not a photograph.
-
----
-
-## 8. Next steps
+## 7. Next steps
 
 **Immediate**
-1. Recover bed box TEST 0014 before the attachment expires
-2. Commit it, build it, pin the platform if it fails
-3. Test end-to-end: a massage tap on the panel spins a motor
-4. Supply `welcome_800x480.jpg` so it can be embedded in flash like the dial
+1. **Commit and push everything.** Panel TEST 061, `temp_font.h`,
+   `dial_image.h`, audionode TEST 004, this handout. Several near-misses this
+   session came from files existing in only one place.
+2. **Change the WiFi password** and keep credentials out of the public repo.
+3. Recover bed box TEST 0014 before the attachment expires.
+4. Order the ESP32-S3-DevKitC-1 N16R8.
 
-**Voice recognition — the real remaining project**
-Capture works; recognition does not exist. The Hebrew wake word `אָחִינוּ`
-cannot come from Espressif's ESP-SR, which ships fixed wake words and no
-Hebrew. A custom word means training a model (microWakeWord or Edge Impulse)
-from hundreds of recorded samples. Decide the approach before writing code.
-Note also that the panel is already spending 1.22 MB of PSRAM and driving an
-800×480 RGB panel with LVGL — running inference here will contend for memory
-bandwidth. Moving the microphone to the WT32-ETH01 audio node, on the UART
-bus, is likely the better home for it.
+**When hardware arrives**
+5. Audio node onto the WT32-ETH01 — port TEST 004, change only the network
+   setup, then chase the one-channel problem on a board that stays up.
+6. ESP-SR speech on the S3, steps 1–7 above.
 
 **Soon**
-5. Decide on the SD photos and repo visibility
-6. Buy DS3231 RTC (~₪10) and SHT31 or BME280 humidity sensor (~₪10–15)
-7. Second bed box: QuinLED, 4× L298N, 12V 5A PSU
-8. Clone `soulcollage-ira`, `Solarium-website`, `Tractor-2023` into `C:\projects`
+7. Supply `welcome_800x480.jpg` so it can be embedded in flash like the dial.
+8. Decide on the SD photos and repo visibility.
+9. Second bed box: QuinLED, 4× L298N, 12V 5A PSU.
+10. A spare BH1750 arrived with the sensors. It has an ADDR pin: floating or
+    low gives 0x23, tied high gives 0x5C. The panel already has one at 0x23,
+    so a second would need its address moved. Purpose not yet decided.
 
 **Later**
-9. Audio node — WT32-ETH01 + PCM5102A, internet radio over UART from the panel
-10. AC control via IR or Switcher Breeze
-11. Hebrew UI text — needs a custom LVGL font
+11. Panel radio UI wired to the audio node over UART (commands 6–9, node
+    address 9).
+12. Spotify Connect via cspot — ESP-IDF only, Premium required, unofficial.
+    Becomes much easier once IDF is familiar from the ESP-SR work.
+13. AC control via IR or Switcher Breeze.
+14. Hebrew UI text — needs a custom LVGL font.
 
 ---
 
-## 9. Hard-won lessons
+## 8. Hard-won lessons
 
-**From this session**
+**New this session**
 
-- **The panel has seven exposed GPIOs and all are used.** Check the pin
-  budget before buying or wiring any peripheral.
-- **LVGL's default heap is 32 KB** when `LV_CONF_SKIP` is set. Building one
-  list button per SD file at boot exhausted it; the allocator returned NULL
-  and LVGL dereferenced it — `StoreProhibited`, `EXCVADDR 0x00000098`, inside
-  `lv_obj_class_create_obj`. Build lists on demand, and check
-  `lv_mem_monitor()` before adding widgets in a loop.
-- **`GFXglyph` stores `xOffset`/`yOffset` as `int8_t` and `GFXfont` stores
-  `yAdvance` as `uint8_t`.** A 150 px font referenced from the baseline needs
-  −147 and 284 and will not compile. Reference offsets from the top of the
-  digits instead. `bitmapOffset` is `uint16_t`, capping a font's bitmap at
-  65535 bytes.
-- **JPEGDEC decodes baseline JPEG only.** Progressive files open fine on a PC
-  and fail silently on the ESP32. Prefer plain 4:2:0, no optimised Huffman.
-- **A full-screen repaint on an RGB panel flickers**, because the panel scans
-  continuously and can show a half-drawn frame. Compose off-screen and blit
-  once. Caching the source image speeds it up but does not fix the flicker.
-- **The INMP441 is a 24-bit mic in 32-bit slots.** Requesting
-  `I2S_BITS_PER_SAMPLE_16BIT` returns near-silence that looks exactly like a
-  wiring fault.
-- **`i2s_pin_config_t`'s first field is `mck_io_num`.** A designated
-  initialiser that omits it silently selects GPIO0, a strapping pin. Assign
-  every field explicitly.
-- **Never let a failure be silent.** Every hour lost this session was to
-  something that failed without saying so — a missing dial, an unfilled
-  buffer, an invisible label. Print the reason, and if possible put it on the
-  screen.
+- **A feature that never fires may be a design fault, not a bug.** The pressure
+  arrow was correct code that could not run: its only update path sat behind a
+  30-minute gate, and development reboots reset it every time. Check that a
+  feature's trigger conditions can actually occur in normal use.
+- **A serial monitor can stop an ESP32 dead.** Opening the monitor asserts DTR
+  and RTS; on ESP32 boards those lines drive EN and GPIO0 for auto-flashing,
+  and a board without the protecting circuit drops straight into the
+  bootloader and goes silent. `monitor_rts = 0` and `monitor_dtr = 0` fix it.
+  This cost hours and looked exactly like a dead board. **Shemi found it** by
+  noticing the LED stopped blinking the moment the monitor connected.
+- **Prove the board runs before debugging anything else.** A blink test with no
+  libraries, no WiFi and no serial answers "is this board alive" in one minute.
+- **`Serial.flush()` after every line during bring-up.** A board that resets
+  mid-print truncates the log exactly where the useful information was.
+- **Brownout looks like a code bug.** `rst:0x1 (POWERON_RESET)` with no panic
+  message, at the moment a peripheral starts, is a power problem — not a
+  crash. A peripheral's own power LED going dark at the same instant confirms
+  it.
+- **Pin a library version AND check its API.** 3.4.0 and 3.4.7 of the same
+  library use different callback styles.
+- **Windows renumbers COM ports on replug.** A silent monitor may simply be
+  listening on the wrong one. Check the `Terminal on COMxx` line.
+- **The stream URL is often not in the rendered page.** View-source and search
+  for `m3u8` found what DevTools filtering did not.
+- **Keep scratch projects outside the repo.** A blink test written into
+  `audionode/src/main.cpp` destroyed the audio node firmware.
 
 **Standing**
 
@@ -387,12 +380,19 @@ bus, is likely the better home for it.
   the code.
 - Chat attachments expire. Anything delivered in a chat gets committed the
   same day.
-- Version numbers belong in commit messages, not filenames.
+- Never let a failure be silent. Print the reason, and put it on screen if you
+  can.
 - A black screen with no serial output means the failure is before `setup()`.
-  Look at flash and PSRAM settings, not at the code.
 - `board_build.*` and `board_upload.*` are different things and both matter.
+- LVGL's default heap is 32 KB under `LV_CONF_SKIP`; build lists on demand.
+- `GFXglyph` offsets are `int8_t` — reference a large font from the top of the
+  digits, not the baseline.
+- JPEGDEC decodes **baseline** JPEG only; progressive files fail silently.
+- Full-screen repaints flicker on an RGB panel. Compose off-screen, blit once.
+- The INMP441 is a 24-bit mic in 32-bit slots; asking for 16-bit gives near
+  silence that looks like a wiring fault.
 - Keep project paths free of Hebrew characters.
 
 ---
 
-*End of handout — Revision 7.*
+*End of handout — Revision 9.*

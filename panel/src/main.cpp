@@ -1,5 +1,5 @@
 /* ============================================================
- *                        TEST  061
+ *                        TEST  062
  * ============================================================
  *  PANEL FIRMWARE  (ESP32-8048S043, ESP32-S3-WROOM-1 N16R8)
  *  Adjustable Bed Massage Retrofit - Revision 4
@@ -22,6 +22,32 @@
  *   044 - null guards on every label update. Fixes the
  *         LoadProhibited reboot at EXCVADDR 0x00000022, which
  *         was a timer touching a label before it was built.
+ *
+ *  NEW IN 062 - SHT31 HUMIDITY, AND THE PRESSURE ARROW FIXED:
+ *   The I2C bus now carries five devices:
+ *     0x23 BH1750 light      0x44 SHT31 temp+humidity  (NEW)
+ *     0x57 AT24C32 EEPROM on the RTC board, unused
+ *     0x5D GT911 touch       0x68 DS3231 clock         (NEW)
+ *     0x76 BMP280 temp+pressure
+ *
+ *   - SHT31 is now the source for TEMPERATURE and HUMIDITY.
+ *     It is the more accurate air sensor. Written with raw
+ *     Wire calls in the same style as the BMP280 driver, so
+ *     no new library is needed.
+ *   - BMP280 is kept for PRESSURE and its trend only.
+ *   - Humidity finally appears - the panel has never shown it,
+ *     because the BMP280 does not measure it.
+ *
+ *   THE PRESSURE ARROW NEVER APPEARED, and it was a design
+ *   fault, not a bug. pressTrend only ever changed inside a
+ *   block gated on 30 minutes having passed, so every reboot
+ *   reset it to a dash and half an hour of uptime was needed
+ *   before it could move at all. It also wanted a 0.3 hPa
+ *   swing, which is a real weather change. Now: the first
+ *   reference is taken immediately, the window is 10 minutes,
+ *   the threshold is 0.1 hPa, and the actual pressure value is
+ *   displayed so the reading means something even when steady.
+ *   `trend` on the serial console forces a recalculation.
  *
  *  NEW IN 061 - IT ACTUALLY DETECTS THE WORD NOW:
  *   Measured on TEST 060 with three references learned from live
@@ -206,7 +232,7 @@
  *  Board: ESP32-8048S043 | 800x480 ST7262 RGB | GT911 touch
  *  I2C SDA=19 SCL=20 | SD CS=10 MOSI=11 CLK=12 MISO=13 (FAT32)
  *  UART1 to bed box: TX=IO17 RX=IO18 @115200 via P3
- *  TEST_NUMBER 61 - printed at boot AND shown on screen.
+ *  TEST_NUMBER 62 - printed at boot AND shown on screen.
  * ============================================================ */
 
 #include <Arduino.h>
@@ -223,7 +249,7 @@
 #include <lvgl.h>
 #include <Preferences.h>
 
-#define TEST_NUMBER 61
+#define TEST_NUMBER 62
 
 // ---- backlight ----
 #define GFX_BL 2
@@ -382,12 +408,15 @@ uint32_t lastRandomMs = 0;
 #define GT911_ADDR1 0x5D
 #define GT911_ADDR2 0x14
 #define BH1750_ADDR 0x23
+// TEST 062: SHT31 temperature + humidity
+#define SHT31_ADDR   0x44
 #define BME280_ADDR1 0x76
 #define BME280_ADDR2 0x77
 #define DS3231_ADDR 0x68
 bool haveDS3231 = false;
 uint8_t gt911Addr = 0, bme280Addr = 0;
 bool haveBH1750 = false, haveBME280 = false, isBME = false;
+bool haveSHT31 = false;        // TEST 062
 
 const int TOUCH_RAW_W = 480, TOUCH_RAW_H = 272;
 const int SCREEN_W = 800, SCREEN_H = 480;
@@ -419,7 +448,11 @@ uint32_t slideNextMs = 0;
 
 // ---- sensors ----
 float gLux = 0, gTemp = 0, gHum = -1, gPress = 0;
-float pressRef = 0;            // reference for trend (updated slowly)
+float pressRef = 0;            // reference for trend
+bool  humOK = false, pressOK = false;   // TEST 062
+// TEST 062: was 30 min / 0.3 hPa, which meant the arrow never appeared
+#define PRESS_WINDOW_MS 600000UL       // 10 minutes
+#define PRESS_DELTA     0.1f           // hPa
 uint32_t pressRefMs = 0;
 int pressTrend = 0;            // -1 down, 0 steady, +1 up
 bool luxOK = false, tempOK = false;
@@ -471,6 +504,8 @@ bool bh1750Begin();
 bool bh1750Read(float &lx);
 bool bme280Begin();
 bool bme280Read(float &t, float &h, float &p);
+bool sht31Begin();                          // TEST 062
+bool sht31Read(float &t, float &h);         // TEST 062
 void setupBacklight();
 void computeTargetFromLux();
 void easeBacklight();
@@ -1190,6 +1225,45 @@ void bmeWriteReg(uint8_t reg, uint8_t val) {
   Wire.beginTransmission(bme280Addr);
   Wire.write(reg); Wire.write(val); Wire.endTransmission();
 }
+// ============================================================
+//  TEST 062: SHT31 temperature + humidity, raw Wire.
+//  Same approach as the BMP280 driver above - no extra library.
+// ============================================================
+bool sht31Begin() {
+  Wire.beginTransmission(SHT31_ADDR);
+  if (Wire.endTransmission() != 0) return false;
+
+  // soft reset, then leave it in single-shot mode
+  Wire.beginTransmission(SHT31_ADDR);
+  Wire.write(0x30); Wire.write(0xA2);
+  Wire.endTransmission();
+  delay(20);
+  Serial.printf("SHT31 at 0x%02X\n", SHT31_ADDR);
+  return true;
+}
+
+bool sht31Read(float &t, float &h) {
+  // single shot, high repeatability, clock stretching disabled
+  Wire.beginTransmission(SHT31_ADDR);
+  Wire.write(0x24); Wire.write(0x00);
+  if (Wire.endTransmission() != 0) return false;
+  delay(20);                       // 15 ms typical for high repeatability
+
+  if (Wire.requestFrom((uint8_t)SHT31_ADDR, (uint8_t)6) != 6) return false;
+  uint8_t d[6];
+  for (int i = 0; i < 6; i++) d[i] = Wire.read();
+
+  uint16_t rawT = ((uint16_t)d[0] << 8) | d[1];
+  uint16_t rawH = ((uint16_t)d[3] << 8) | d[4];
+  if (rawT == 0xFFFF && rawH == 0xFFFF) return false;
+
+  t = -45.0f + 175.0f * ((float)rawT / 65535.0f);
+  h = 100.0f * ((float)rawH / 65535.0f);
+  if (h < 0.0f)   h = 0.0f;
+  if (h > 100.0f) h = 100.0f;
+  return true;
+}
+
 bool bme280Begin() {
   const uint8_t addrs[2] = { BME280_ADDR1, BME280_ADDR2 };
   for (int i = 0; i < 2; i++) {
@@ -2276,22 +2350,34 @@ void saveSettings() {
 
 void updateSensorLabel() {
   if (!lblSensors) return;                        // TEST 044 guard
-  // pressure trend: compare to a reference taken every 30 min
-  if (tempOK) {
+
+  // TEST 062: the reference is taken on the FIRST reading, the window is
+  // 10 minutes and the threshold 0.1 hPa. The old code only ever updated
+  // the trend inside a 30-minute gate, so a dash was all you ever saw.
+  if (pressOK && gPress > 0) {
     if (pressRef == 0) { pressRef = gPress; pressRefMs = millis(); }
-    if (millis() - pressRefMs > 1800000UL) {     // 30 min
-      if (gPress > pressRef + 0.3f) pressTrend = 1;
-      else if (gPress < pressRef - 0.3f) pressTrend = -1;
-      else pressTrend = 0;
+    if (millis() - pressRefMs > PRESS_WINDOW_MS) {
+      if (gPress > pressRef + PRESS_DELTA)      pressTrend =  1;
+      else if (gPress < pressRef - PRESS_DELTA) pressTrend = -1;
+      else                                      pressTrend =  0;
       pressRef = gPress; pressRefMs = millis();
     }
   }
   const char *arrow = (pressTrend > 0) ? LV_SYMBOL_UP :
-                      (pressTrend < 0) ? LV_SYMBOL_DOWN : "-";
-  char t[16] = "--";
-  if (tempOK) snprintf(t, sizeof(t), "%.1f C", gTemp);
-  if (tempOK) lv_label_set_text_fmt(lblSensors, "%s  %s", t, arrow);
-  else        lv_label_set_text(lblSensors, "-- C");
+                      (pressTrend < 0) ? LV_SYMBOL_DOWN : "=";
+
+  // TEST 062: temperature and humidity from the SHT31, pressure from the
+  // BMP280. Showing the pressure NUMBER means the display says something
+  // useful even when the trend is steady.
+  char line[64];
+  if (tempOK && humOK)
+    snprintf(line, sizeof(line), "%.1f C  %.0f%%  %.0f %s",
+             gTemp, gHum, gPress, arrow);
+  else if (tempOK)
+    snprintf(line, sizeof(line), "%.1f C  %.0f %s", gTemp, gPress, arrow);
+  else
+    snprintf(line, sizeof(line), "-- C");
+  lv_label_set_text(lblSensors, line);
 }
 
 
@@ -2454,6 +2540,26 @@ void pollSerialCommands(){
       }
       else if (conBuf == "ref")      learnReference();
       else if (conBuf == "refclear") clearReferences();
+      else if (conBuf == "trend") {
+        // TEST 062: force a trend recalculation instead of waiting
+        if (pressRef == 0) Serial.println("trend: no reference yet");
+        else {
+          float d = gPress - pressRef;
+          pressTrend = (d > PRESS_DELTA) ? 1 : (d < -PRESS_DELTA) ? -1 : 0;
+          Serial.printf("trend: now %.1f, ref %.1f, delta %+.2f hPa -> %s\n",
+                        gPress, pressRef, d,
+                        pressTrend > 0 ? "rising" : pressTrend < 0 ? "falling" : "steady");
+          pressRef = gPress; pressRefMs = millis();
+        }
+        updateSensorLabel();
+      }
+      else if (conBuf == "sensors") {
+        Serial.printf("BH1750 %s   SHT31 %s   BMP280 %s   DS3231 %s\n",
+                      haveBH1750 ? "ok" : "--", haveSHT31 ? "ok" : "--",
+                      haveBME280 ? "ok" : "--", haveDS3231 ? "ok" : "--");
+        Serial.printf("  temp %.2f C  humidity %.1f %%  pressure %.2f hPa  lux %.0f\n",
+                      gTemp, gHum, gPress, gLux);
+      }
       else if (conBuf == "dsp") {
         Serial.printf("dsp: %s  last word %d frames, %d/%d references (",
                       dspReady ? "ready" : "not ready", curFrames, refCount, REF_SLOTS);
@@ -2557,16 +2663,32 @@ void setup() {
   i2cScan();
   gt911Probe();
   haveBH1750 = bh1750Begin();
+  haveSHT31  = sht31Begin();          // TEST 062
   haveBME280 = bme280Begin();
   haveDS3231 = ds3231Present();
   if (haveDS3231) { timeSet = true; Serial.println("DS3231 RTC found (0x68) - using battery-backed time"); }
   else Serial.println("DS3231 absent - clock uses manual 'time HH:MM'");
   Serial.printf("BH1750 %s, BME/BMP280 %s\n",
                 haveBH1750 ? "ok" : "absent", haveBME280 ? "ok" : "absent");
+  Serial.printf("SHT31 %s  - temperature and humidity source\n",
+                haveSHT31 ? "ok" : "absent");
 
   randomSeed(esp_random());
   if (haveBH1750) luxOK = bh1750Read(gLux);
-  if (haveBME280) tempOK = bme280Read(gTemp, gHum, gPress);
+  // TEST 062: SHT31 owns temperature and humidity; BMP280 owns pressure.
+  {
+    float bt = 0, bh = 0, bp = 0;
+    pressOK = haveBME280 && bme280Read(bt, bh, bp);
+    if (pressOK) gPress = bp;
+    if (haveSHT31) {
+      humOK = sht31Read(gTemp, gHum);
+      tempOK = humOK;
+    } else {
+      tempOK = pressOK;
+      if (pressOK) gTemp = bt;
+      humOK = false;
+    }
+  }
   computeTargetFromLux();
 
   // ---- LVGL init ----
@@ -2615,7 +2737,13 @@ void loop() {
     if (millis() - lastSensorMs > 1000) {
       lastSensorMs = millis();
       if (haveBH1750) luxOK = bh1750Read(gLux);
-      if (haveBME280) tempOK = bme280Read(gTemp, gHum, gPress);
+      {
+        float bt = 0, bh = 0, bp = 0;
+        pressOK = haveBME280 && bme280Read(bt, bh, bp);
+        if (pressOK) gPress = bp;
+        if (haveSHT31) { humOK = sht31Read(gTemp, gHum); tempOK = humOK; }
+        else { tempOK = pressOK; if (pressOK) gTemp = bt; humOK = false; }
+      }
       computeTargetFromLux();
       updateSensorLabel();
       // TEST 054: one line a second, so a silent mic is obvious
@@ -2695,7 +2823,7 @@ void loop() {
 }
 
 /* ============================================================
- *                        TEST  061   (end of file)
+ *                        TEST  062   (end of file)
  * ============================================================
  *  Panel - Stage 3 - rebuild of the lost 041-044 on top of 040
  *
@@ -2708,6 +2836,14 @@ void loop() {
  *        updateAnalog, all display pointers initialised to NULL
  *
  *  platformio.ini v4 - LV_CONF_SKIP, no lv_conf.h needed.
- *  NOT hardware-tested. Watch the serial monitor on first boot.
  *  Next: bed box TEST 0014 on UART, then end-to-end motor test.
+ *
+ *  TRY THESE ON THE SERIAL CONSOLE AFTER FLASHING
+ *    sensors   one line with every reading, and which chips answered
+ *    trend     force a pressure trend recalculation instead of
+ *              waiting for the 10-minute window
+ *    time HH:MM  sets the clock AND writes it to the DS3231, so it
+ *              now survives a power cut
+ * ============================================================
+ *                  TEST  062   (end of file)
  * ============================================================ */
