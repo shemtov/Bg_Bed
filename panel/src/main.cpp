@@ -1,5 +1,5 @@
 /* ============================================================
- *                        TEST  062
+ *                        TEST  074
  * ============================================================
  *  PANEL FIRMWARE  (ESP32-8048S043, ESP32-S3-WROOM-1 N16R8)
  *  Adjustable Bed Massage Retrofit - Revision 4
@@ -22,6 +22,281 @@
  *   044 - null guards on every label update. Fixes the
  *         LoadProhibited reboot at EXCVADDR 0x00000022, which
  *         was a timer touching a label before it was built.
+ *
+ *  NEW IN 074 - the room temperature on the AC screen:
+ *
+ *   It was there, just easy to miss: 20 pt grey text tucked at
+ *   x 560. It now sits properly to the RIGHT OF THE PLUS BUTTON,
+ *   in 40 pt, with a small "room" caption above it and a small
+ *   "c" beside it - the same shape as the target temperature on
+ *   the left, so the screen reads as: what you asked for, and
+ *   what the room actually is.
+ *
+ *   The reading comes from the panel's own SHT31, not from the
+ *   air conditioner. That matters: this Breeze does not report
+ *   its target back, so the big number on the left is only what
+ *   was last commanded, while the number on the right is
+ *   measured. They are not the same kind of fact.
+ *
+ *  NEW IN 073 - the settings screens are grey, not white:
+ *
+ *   LVGL's light theme was painting every tab page near white,
+ *   which glared in a dark bedroom and made every earlier text
+ *   colour a fight. All five tab pages, the tab bar itself and
+ *   the tabview background are now a mid grey, and the text is
+ *   set to suit it rather than to survive it.
+ *
+ *     SET_PAGE_BG   0x2A3038   the page behind everything
+ *     SET_BAR_BG    0x1E242B   the tab bar
+ *     SET_TEXT_COL  0xE8ECF2   primary text, near white on grey
+ *     SET_DIM_COL   0x9AA6B2   secondary text
+ *
+ *   The text colours INVERTED, because the background did. They
+ *   were near black to survive a white page; on grey they need
+ *   to be light. Anything left dark would now be the thing that
+ *   disappears.
+ *
+ *  NEW IN 072 - the headers now say when they are out of date:
+ *
+ *   TEST 071 failed to build with
+ *     'TITLE_HOME' was not declared in this scope
+ *     note: suggested alternative: 'LV_KEY_HOME'
+ *   which points nowhere useful. The real cause was an OLD
+ *   font_hebrew.h still sitting in include/ - the one from TEST
+ *   064, which had HEB_MAZGAN but neither HEB_BEDROOM nor
+ *   TITLE_HOME, and no Latin glyphs either.
+ *
+ *   Every header this file depends on is now checked at the top,
+ *   with a message naming the file and the test that produced it.
+ *   A stale header can no longer hide behind a confusing error.
+ *
+ *   No other change. If TEST 071 already built for you, this is
+ *   the same firmware.
+ *
+ *  NEW IN 071 - THE LAMP NO LONGER ANIMATES AT ALL:
+ *
+ *   The flickering is gone because the cause is gone. Slowing the
+ *   colour fade from 60 ms to 400 ms in TEST 068 was not enough:
+ *   ANY repeated redraw of a 200 px image on this RGB panel shows
+ *   as a twitch across the whole screen, because the panel scans
+ *   continuously and LVGL has to repaint the region while it does.
+ *
+ *   So the lamp is now a still picture with two states and nothing
+ *   in between. It is recoloured ONCE, at the moment it is pressed:
+ *     off  grey
+ *     on   warm amber
+ *   No timer, no stepping, no repaint unless something is pressed.
+ *   The screen is completely static while nothing is happening.
+ *
+ *   The colour cycling was a nice idea and it cost calm, which
+ *   matters more on something you look at from bed.
+ *
+ *   AC DIMMED TO 75 PERCENT. The white unit glared beside the
+ *   softer tiles. tile_img.h was rebuilt and must be replaced.
+ *
+ *  NEW IN 070 - the title is Hebrew:
+ *
+ *   "BG BEDROOM" becomes "BG" followed by the Hebrew for bedroom.
+ *
+ *   font_hebrew.h WAS REGENERATED and must be replaced. It now
+ *   carries printable ASCII 0x20-0x7E as well as the Hebrew
+ *   alphabet, so a single font can draw "BG" and the Hebrew in
+ *   the same label. The old one was Hebrew only, and the Latin
+ *   would have come out as empty boxes.
+ *
+ *   LVGL's bidi is off in this build, so the Hebrew is stored
+ *   PRE-REVERSED in the header as HEB_BEDROOM, and TITLE_HOME
+ *   joins it to "BG ". Nothing in this file reverses anything.
+ *   Verified: the escape decodes to the reversed word, which read
+ *   right to left is the correct Hebrew.
+ *
+ *  NEW IN 069 - the radio screen, and a quieter screensaver:
+ *
+ *   THE RADIO SCREEN EXISTS NOW. It was a "coming soon"
+ *   placeholder. Eight station tiles, a now-playing line, a
+ *   volume slider 0-21, Sleep 30 and Stop. Every button sends a
+ *   UART message to the audio node and prints it on serial.
+ *     6 RADIO_PLAY   target = station number
+ *     7 RADIO_STOP
+ *     8 RADIO_VOL    value 0..21
+ *     9 RADIO_SLEEP  value = minutes
+ *   Kan 88 and Kan Gimel carry their real stream URLs and their
+ *   own brand colours. NOTHING PLAYS YET - the audio node still
+ *   has to be built. The panel half can be finished regardless.
+ *   Spotify has a tile that says plainly it is not connected.
+ *
+ *   SCREENSAVER, quieter again:
+ *     SAVER_DIM 75 -> 56, so the dial, the hands and the cap all
+ *     draw at 56 percent
+ *     the temperature is SMALLER again - temp_font.h regenerated
+ *     at 80 px, was 108, was 150
+ *     it moved RIGHT, TEMP_CX 628 -> 664
+ *     and it is GREY now, 0x9D15, not blue and not green
+ *
+ *  NEW IN 068 - colours, calm, and a simpler status line:
+ *
+ *   SIX SOFT TILE COLOURS, one per tile, baked into the images:
+ *     bed amber, radio green, AC blue, lamp teal, shutters brick,
+ *     settings violet grey. All muted; none of them shout.
+ *
+ *   THE WHOLE SCREEN TWITCHED while the lamp was lit. The fade was
+ *   restyling the tile's background every 60 ms, and repainting a
+ *   200 px tile under six others that often was enough to make the
+ *   RGB panel stutter. Now the fade only recolours the lamp IMAGE,
+ *   never the tile behind it, and steps every 400 ms instead of 60.
+ *   Same slow drift, a sixteenth of the redraw.
+ *
+ *   THE SHADE TILE NO LONGER ANIMATES. Press it and the picture
+ *   changes at once - shutters open, or shutters shut. The command
+ *   still goes out and the 20 s timer still runs underneath, but
+ *   nothing on screen moves.
+ *
+ *   TITLE is "BG BEDROOM", not "Ben Panel".
+ *
+ *   STATUS LINE is just the TIME and the TEMPERATURE, in that
+ *   order. Pressure, the trend arrow, humidity and the degree
+ *   symbol are all gone from the home screen. They are still
+ *   measured, still on the About tab, still on serial.
+ *
+ *  NEW IN 067 - THE HOME SCREEN REBUILT: 3 UP, 3 DOWN, NO WORDS
+ *
+ *   Six square 200x200 tiles in two rows of three, each one a
+ *   photograph. No captions, in any language - the picture is the
+ *   label. Grid: 78 px left margin, 22 px between columns, 16 px
+ *   between rows, 64 px of status strip along the top.
+ *
+ *     BED     short press opens the massage screen
+ *     RADIO   short press opens the radio screen, dial lights when
+ *             something is playing
+ *     AC      SHORT press toggles the air conditioner and the
+ *             louvre opens with air falling out of it
+ *             LONG press, 3 s, opens the AC screen
+ *     LIGHT   the Morning Glory lamp. Press to toggle. When lit it
+ *             drifts through colour, fading over LAMP_FADE_MS
+ *     SHADE   press to travel, press again to stop. Twenty seconds
+ *             end to end, then the picture settles to the other
+ *             state - shutters open, or shutters closed
+ *     SETTINGS opens the settings screen
+ *
+ *   THREE HEADERS ARE REQUIRED IN include/
+ *     tile_img.h    bed, radio, AC and shutters, 200x200 each
+ *     lamp_img.h    the lamp, with alpha so it can be recoloured
+ *     font_hebrew.h no longer used on the home screen, but the
+ *                   AC screen still needs it
+ *
+ *   The floating gear button is gone; settings is a tile now.
+ *
+ *  NEW IN 066 - the screensaver, softened:
+ *
+ *   DIMMER. The whole diver clock now draws at SAVER_DIM percent,
+ *   75 by default. The dial is dimmed ONCE as it is decoded into
+ *   PSRAM, so it costs nothing per frame, and the hands and text
+ *   use pre-dimmed colours. Change the one number to taste.
+ *
+ *   TEMPERATURE SMALLER. temp_font.h was regenerated at 108 px
+ *   instead of 150, and the C at 34 instead of 46. The font is
+ *   baked at a fixed size, so this needed a new header - install
+ *   the new temp_font.h alongside this file.
+ *
+ *   TEMPERATURE IS LIGHT BLUE, not green. 0x4CF7, which is
+ *   #60D0FF taken down to 75 percent, so it matches the dimming
+ *   of everything else. The same blue as the home screen's
+ *   sensor readout, which ties the two together.
+ *
+ *   The clock HANDS stay green - they read as hands, and the
+ *   contrast against the blue temperature helps tell them apart.
+ *   They are dimmed to 75 percent like everything else.
+ *
+ *  NEW IN 065 - six fixes from looking at the real screen:
+ *
+ *   1 ABOUT SAID "Humidity: no". It was still asking the BMP280,
+ *     which cannot measure humidity, and never asked the SHT31
+ *     that TEST 062 added. It now reports the SHT31 and shows the
+ *     live readings.
+ *
+ *   2 SETTINGS TEXT WAS TOO PALE against LVGL's light theme.
+ *     All of it is dark now, via SET_TEXT_COL and SET_DIM_COL.
+ *
+ *   3 THE TILES JITTERED every couple of seconds. Cause: the home
+ *     screen carried the microphone bar and level text, rewritten
+ *     on EVERY loop pass with text whose width kept changing, so
+ *     LVGL invalidated and reflowed constantly. Compounded by
+ *     refreshAC() running once a second even when the AC screen
+ *     was not on show. Both are fixed - see 4.
+ *
+ *   4 MICROPHONE UI REMOVED from the home screen: the level bar,
+ *     the "mic 12%" text, the word counter and the Learn button.
+ *     The voice code still runs and still prints to serial; only
+ *     the on-screen clutter is gone. refreshAC() now runs only
+ *     while the AC screen is actually visible.
+ *
+ *   5 SHADE TILE was too pale and too square. Darker glass, warmer
+ *     frame, rounder corners, softer blind.
+ *
+ *   6 LAMP COLOUR CYCLE was jumpy. It now FADES between colours,
+ *     interpolating every 60 ms across LAMP_FADE_MS, so the light
+ *     drifts rather than flicking.
+ *
+ *  NEW IN 064 - LIVING TILES, AND HEBREW:
+ *   THE HOME SCREEN NOW HAS FIVE TILES
+ *     Massage | Radio | AC | Light | Shade
+ *
+ *   LIGHT TILE - a photograph of the Morning Glory lamp
+ *   (Ayala Serfaty, Aqua Creations), from Shemi's own picture.
+ *     off  the image recoloured grey, still
+ *     on   the image recoloured through red, green, yellow and
+ *          amber, changing twice a second, because the real lamp
+ *          shifts colour and the movement itself says it is on
+ *   ONE image is stored and recoloured, not two, so the states
+ *   cannot drift apart and it costs 67 KB instead of 134 KB.
+ *
+ *   SHADE TILE - drawn with LVGL, no image needed.
+ *     resting  window clear (up) or covered (down)
+ *     moving   the shade travels over SHADE_TRAVEL_MS, 20 s, then
+ *              settles into the other state. Press again while it
+ *              is moving and it stops where it is.
+ *
+ *   AC TILE - two functions from one tile.
+ *     short press  toggles the AC on and off, no screen change
+ *     long press   opens the AC screen
+ *   Labelled in Hebrew. LVGL's bidi support is off in this build,
+ *   so the word is stored pre-reversed - see font_hebrew.h.
+ *
+ *   TWO NEW FILES ARE REQUIRED IN include/
+ *     lamp_img.h     the lamp photograph, 150x150
+ *     font_hebrew.h  Hebrew glyphs, the built-in fonts are Latin
+ *
+ *  NEW IN 063 - AC SCREEN, ROOM SCREEN, FOURTH HOME TILE:
+ *   The home screen now has FOUR tiles: Massage, Radio, AC, Room.
+ *
+ *   AC SCREEN - drives the Switcher Breeze, which sits away from
+ *   the beds and has line of sight to the Tadiran unit.
+ *     room temperature from the panel's own SHT31
+ *     target temperature with - and +
+ *     mode    cool / heat / dry / fan / auto
+ *     fan     low / med / high / auto
+ *     swing   on / off        (the Breeze API offers ONLY on/off,
+ *             there is no step-swing versus continuous-sweep)
+ *     power   on / off
+ *
+ *   ROOM SCREEN - 433 MHz, one transmitter on the audio node
+ *   sending different codes to two receivers.
+ *     shades  UP and DOWN. Press again while moving = STOP.
+ *             The panel has no feedback from the shades, so it
+ *             tracks its own idea of movement and gives up after
+ *             SHADE_TIMEOUT_MS in case the shade hit its limit.
+ *     light   on / off
+ *
+ *   NOTHING IS CONNECTED YET. Every button sends a UART message
+ *   and prints it on serial. The audio node has to grow the other
+ *   half: the Breeze protocol in C++, and an FS1000A transmitter.
+ *   The panel side can be built and seen on hardware today, which
+ *   is why it is being done first.
+ *
+ *   KNOWN LIMITATION, measured not guessed: this Breeze reports
+ *   target_temperature 0 no matter what it is really set to, so
+ *   the panel can only ever show what it last COMMANDED. Mode,
+ *   fan, swing and room temperature do read back correctly.
  *
  *  NEW IN 062 - SHT31 HUMIDITY, AND THE PRESSURE ARROW FIXED:
  *   The I2C bus now carries five devices:
@@ -232,7 +507,7 @@
  *  Board: ESP32-8048S043 | 800x480 ST7262 RGB | GT911 touch
  *  I2C SDA=19 SCL=20 | SD CS=10 MOSI=11 CLK=12 MISO=13 (FAT32)
  *  UART1 to bed box: TX=IO17 RX=IO18 @115200 via P3
- *  TEST_NUMBER 62 - printed at boot AND shown on screen.
+ *  TEST_NUMBER 74 - printed at boot AND shown on screen.
  * ============================================================ */
 
 #include <Arduino.h>
@@ -246,10 +521,25 @@
 #include <Arduino_GFX_Library.h>
 #include "temp_font.h"          // TEST 050: TempBig / TempSmall, put it in include/
 #include "dial_image.h"         // TEST 053: the dial, embedded in flash
+#include "lamp_img.h"           // TEST 064: the Morning Glory photograph
+#include "tile_img.h"           // TEST 067: bed, radio, AC, shutters
+#include "font_hebrew.h"        // TEST 070: Hebrew AND Latin glyphs
+
+// ============================================================
+//  TEST 072: check the headers are the current ones.
+//  A stale header otherwise fails somewhere deep in the code with
+//  an error that names a symbol rather than the file at fault.
+// ============================================================
+#ifndef TITLE_HOME
+#error "font_hebrew.h is out of date. Install the one from TEST 070 - it adds Latin glyphs, HEB_BEDROOM and TITLE_HOME. The old one had Hebrew only."
+#endif
+#ifndef HEB_MAZGAN
+#error "font_hebrew.h is missing HEB_MAZGAN. Install the version from TEST 070."
+#endif
 #include <lvgl.h>
 #include <Preferences.h>
 
-#define TEST_NUMBER 62
+#define TEST_NUMBER 74
 
 // ---- backlight ----
 #define GFX_BL 2
@@ -313,12 +603,15 @@ float targetDuty = 255, curDuty = 255;
 #define WELCOME_FILE "/welcome_800x480.jpg"
 #define PHOTO_DIR "/photos"
 #define DIAL_FILE "/diver_dial.jpg"
+// TEST 066: how bright the screensaver draws, in percent. Applied to
+// the dial once at decode time, and baked into the hand colours below.
+#define SAVER_DIM 56
 // TEST 048: where the clock face sits on the screensaver. Must match the
 // dial image on the card - the artwork in dial_left_*.jpg is centred on 240.
 #define CLOCK_CX 240
 #define CLOCK_CY 240
 // Temperature block, centred in the space to the right of the dial.
-#define TEMP_CX  628
+#define TEMP_CX  664
 // TEST 050: sizes now come from the font in temp_font.h (digits 150 px,
 // C 46 px). TEMP_C_GAP is still the space between the digits and the C.
 #define TEMP_C_GAP   16
@@ -335,7 +628,12 @@ float targetDuty = 255, curDuty = 255;
 #define TEMP_CLR_H   250
 // TEST 052: Settings > Clock text. The tabview page uses LVGL's light
 // theme (near white), so light colours vanish. Black reads cleanly.
-#define SET_TEXT_COL 0x000000
+// TEST 073: the settings pages are grey now, so the text is light.
+// These four are the only colours the settings screen should use.
+#define SET_PAGE_BG  0x2A3038      // the tab page behind everything
+#define SET_BAR_BG   0x1E242B      // the tab bar across the top
+#define SET_TEXT_COL 0xE8ECF2      // primary text on that grey
+#define SET_DIM_COL  0x9AA6B2      // secondary text, still readable
 bool haveDial = false;
 // TEST 054: microphone state
 bool  micReady   = false;
@@ -516,6 +814,12 @@ void buildHome();
 void buildMassage();
 void buildRadio();
 void buildAC();
+void buildRoom();
+void refreshAC();
+void refreshRoom();
+void refreshBedTile();
+void refreshRadioTile();
+void refreshRadio();
 void buildBedSelector();
 void refreshBedButtons();
 void buildSettings();
@@ -537,6 +841,108 @@ void ds3231SetHM(int hh, int mm);
 void updateSensorLabel();
 void enterSaver();
 void exitSaver();
+
+// ============================================================
+//  TEST 063: commands for the audio node (address 9)
+//  {bedId, cmd, target, value} - same 4 bytes as the bed boxes
+// ============================================================
+#define NODE_AUDIO      9      // the audio node answers to this bedId
+
+#define CMD_RADIO_PLAY  6      // target = station index
+#define CMD_RADIO_STOP  7
+#define CMD_RADIO_VOL   8      // value 0..21
+#define CMD_RADIO_SLEEP 9      // value = minutes
+
+#define CMD_AC_POWER   10      // value 0 off, 1 on
+#define CMD_AC_TEMP    11      // value = degrees C
+#define CMD_AC_MODE    12      // value 0 cool 1 heat 2 dry 3 fan 4 auto
+#define CMD_AC_FAN     13      // value 0 low 1 med 2 high 3 auto
+#define CMD_AC_SWING   14      // value 0 off, 1 on
+#define CMD_RF         15      // target 0 shade, 1 light
+                               //   shade: value 0 stop, 1 up, 2 down
+                               //   light: value 0 off,  1 on
+
+#define AC_TEMP_MIN    16
+#define AC_TEMP_MAX    30
+// A shutter takes 20-30 s to travel. If the panel still thinks it is
+// moving after this, it gives up - otherwise a shade that reached its
+// limit switch leaves the next press sending STOP instead of UP.
+#define SHADE_TIMEOUT_MS 45000UL
+// TEST 064: how long the shade takes to travel end to end. The tile
+// animates over this, then settles into the opposite state.
+#define SHADE_TRAVEL_MS  20000UL
+#define AC_LONG_PRESS_MS  3000     // hold this long to open the AC screen
+// TEST 071: the lamp does not animate. Two fixed colours, applied
+// once when it is pressed. Nothing repaints on a timer.
+#define LAMP_COL_OFF  0x9098A0     // grey, unlit
+#define LAMP_COL_ON   0xE8A030     // warm amber, lit
+
+// TEST 067: the 3 x 2 grid. 800x480: six 200 px tiles, 22 px apart
+// across and 16 px down, leaving 64 px of status strip at the top.
+#define TILE_SZ    200
+#define TILE_GAPX   22
+#define TILE_GAPY   16
+#define TILE_X0     78
+#define TILE_Y0     64
+
+// AC state - what the panel last COMMANDED. This device does not
+// report its target back, so this is the only truth the panel has.
+bool acPower = false;
+int  acTemp  = 24;
+int  acMode  = 0;              // cool
+int  acFan   = 3;              // auto
+bool acSwing = false;
+
+// Shade state - also command-only, there is no feedback at all
+int      shadeMoving = 0;      // 0 stopped, 1 going up, 2 going down
+uint32_t shadeStartMs = 0;
+bool     lightOn = false;
+
+lv_obj_t *acLblTemp = NULL, *acLblRoom = NULL, *acLblPower = NULL;
+lv_obj_t *acModeBtn[5] = {NULL}, *acFanBtn[4] = {NULL}, *acSwingBtn = NULL;
+lv_obj_t *shadeUpBtn = NULL, *shadeDownBtn = NULL, *shadeLbl = NULL;
+lv_obj_t *lightBtn = NULL, *lightLbl = NULL;
+lv_obj_t *scrRoom = NULL;
+
+// TEST 064: home tiles that show state
+// TEST 067: the tiles are photographs now. The label and drawn-window
+// objects that TEST 064 used are gone.
+lv_obj_t *tileLamp = NULL, *tileLampImg = NULL;
+lv_obj_t *tileShade = NULL;
+lv_obj_t *tileAC = NULL;
+lv_obj_t *tileACImg = NULL, *tileShadeImg = NULL;
+lv_obj_t *tileBed = NULL, *tileBedImg = NULL;
+lv_obj_t *tileRadio = NULL, *tileRadioImg = NULL;
+bool radioPlaying = false;      // TEST 067: lights the radio dial
+int  radioStation = -1;         // which tile is lit
+int  radioVolume  = 12;         // 0..21, the audio node's own scale
+lv_obj_t *radioNowLbl = NULL, *radioVolLbl = NULL;
+lv_obj_t *radioBtn[9] = { NULL };
+
+// TEST 069: the stations. Kan 88 and Kan Gimel are real - the URLs
+// were pulled from the data-player-hls-src attribute in kan.org.il
+// page source, and the colours are Kan's own brand colours.
+struct RadioStation { const char *name; uint32_t colour; };
+const RadioStation RADIO[8] = {
+  { "Kan 88",      0x8C24FF },
+  { "Kan Gimel",   0xFF931E },
+  { "Galgalatz",   0x2C58A8 },
+  { "Eco 99",      0x2E8A5C },
+  { "Reshet Bet",  0x5F6673 },
+  { "Kol HaMusica",0x7A5BB5 },
+  { "Groove Salad",0x1D7A94 },
+  { "Drone Zone",  0xA04F7E },
+};
+
+// shade position 0 = fully up (window clear), 1000 = fully down
+int      shadePos = 0;
+// TEST 068: shadeFrom/shadeTo are gone with the animation.
+uint32_t shadeMoveStart = 0;
+
+// TEST 071: no fade state left - the lamp has two colours and no
+// animation, so nothing needs remembering between frames.
+uint32_t acPressMs = 0;
+bool     acLongFired = false;
 
 // ============================================================
 //  UART protocol out
@@ -659,6 +1065,17 @@ bool cacheDial() {
     jpeg.close();
   }
   free(srcbuf);
+
+  // TEST 066: dim the whole dial once, here, rather than every frame.
+  if (ok && dialBlocks > 0 && SAVER_DIM < 100) {
+    const uint32_t f = SAVER_DIM;
+    for (size_t i = 0; i < (size_t)SCREEN_W * SCREEN_H; i++) {
+      uint16_t p = dialBuf[i];
+      uint32_t r = (p >> 11) & 0x1F, g = (p >> 5) & 0x3F, b = p & 0x1F;
+      r = r * f / 100; g = g * f / 100; b = b * f / 100;
+      dialBuf[i] = (uint16_t)((r << 11) | (g << 5) | b);
+    }
+  }
 
   dialCached = ok && (dialBlocks > 0);
   if (dialCached)
@@ -1428,13 +1845,113 @@ static void evOff(lv_event_t *e) {
 // ============================================================
 //  Build screens
 // ============================================================
+// ============================================================
+//  TEST 064: living home tiles
+// ============================================================
+bool massageRunning = false;    // TEST 067: lights the bed tile
+
+void refreshLampTile() {
+  if (!tileLampImg) return;
+  // TEST 071: called only when the tile is pressed, never on a timer.
+  if (lightOn) {
+    lv_obj_set_style_img_recolor(tileLampImg, lv_color_hex(LAMP_COL_ON), 0);
+    lv_obj_set_style_img_recolor_opa(tileLampImg, 100, 0);
+  } else {
+    lv_obj_set_style_img_recolor(tileLampImg, lv_color_hex(LAMP_COL_OFF), 0);
+    lv_obj_set_style_img_recolor_opa(tileLampImg, 205, 0);
+  }
+}
+
+void refreshShadeTile() {
+  if (!tileShadeImg) return;
+  // TEST 068: no animation at all. The picture switches the moment it
+  // is pressed. The real shutter still takes its 20 seconds and the
+  // stop command still works; the tile simply does not perform.
+  lv_img_set_src(tileShadeImg,
+                 shadePos > 500 ? &img_shade_closed : &img_shade_open);
+}
+
+void refreshACTile() {
+  if (!tileACImg) return;
+  lv_img_set_src(tileACImg, acPower ? &img_ac_on : &img_ac_off);
+}
+
+void refreshBedTile() {
+  if (!tileBedImg) return;
+  lv_img_set_src(tileBedImg, massageRunning ? &img_bed_on : &img_bed_off);
+}
+
+void refreshRadioTile() {
+  if (!tileRadioImg) return;
+  lv_img_set_src(tileRadioImg, radioPlaying ? &img_radio_on : &img_radio_off);
+}
+
+// ---- light ----
+static void evTileLamp(lv_event_t *e) {
+  lightOn = !lightOn;
+  sendMsg(NODE_AUDIO, CMD_RF, 1, lightOn ? 1 : 0);
+  refreshLampTile();
+  refreshRoom();
+}
+
+// ---- shade: press starts a 20 s travel, press again stops it ----
+static void evTileShade(lv_event_t *e) {
+  if (shadeMoving != 0) {
+    sendMsg(NODE_AUDIO, CMD_RF, 0, 0);          // STOP
+    shadeMoving = 0;
+    Serial.printf("shade: stopped, picture stays as it is\n");
+  } else {
+    bool goDown = (shadePos < 500);
+    // TEST 068: the picture flips NOW, not over 20 seconds
+    shadePos    = goDown ? 1000 : 0;
+    shadeMoving = goDown ? 2 : 1;
+    shadeMoveStart = millis();
+    shadeStartMs   = millis();
+    sendMsg(NODE_AUDIO, CMD_RF, 0, goDown ? 2 : 1);
+  }
+  refreshShadeTile();
+  refreshRoom();
+}
+
+// ---- AC: short press toggles, long press opens the screen ----
+static void evTileACPressed(lv_event_t *e) {
+  acPressMs = millis();
+  acLongFired = false;
+}
+static void evTileACLong(lv_event_t *e) {
+  acLongFired = true;
+  lv_scr_load(scrAC);
+}
+static void evTileACReleased(lv_event_t *e) {
+  if (acLongFired) return;                       // the long press already acted
+  acPower = !acPower;
+  sendMsg(NODE_AUDIO, CMD_AC_POWER, 0, acPower ? 1 : 0);
+  refreshACTile();
+  refreshAC();
+}
+
+// Called every loop: advances the lamp colour and the shade travel.
+void animateTiles() {
+  uint32_t now = millis();
+
+  // TEST 068: the shutter still takes 20 s in the real world, so the
+  // moving flag is cleared when that time is up - but nothing is drawn
+  // during it. Pressing again inside the 20 s still sends STOP.
+  if (shadeMoving != 0 && (now - shadeMoveStart) >= SHADE_TRAVEL_MS) {
+    shadeMoving = 0;
+    Serial.println("shade: 20 s elapsed, assuming it has arrived");
+  }
+}
+
 void buildHome() {
   scrHome = lv_obj_create(NULL);
   lv_obj_set_style_bg_color(scrHome, lv_color_hex(0x101418), 0);
 
   lv_obj_t *title = lv_label_create(scrHome);
-  lv_label_set_text(title, "Ben Panel");
-  lv_obj_set_style_text_font(title, &lv_font_montserrat_28, 0);
+  // TEST 070: "BG" plus the Hebrew for bedroom. The Hebrew font now
+  // carries Latin too, so one label and one font does the whole title.
+  lv_label_set_text(title, TITLE_HOME);
+  lv_obj_set_style_text_font(title, &font_hebrew_28, 0);
   lv_obj_set_style_text_color(title, lv_color_white(), 0);
   lv_obj_align(title, LV_ALIGN_TOP_LEFT, 20, 14);
 
@@ -1451,71 +1968,78 @@ void buildHome() {
   lv_obj_set_style_text_color(lblSensors, lv_color_hex(0x60D0FF), 0);
   lv_obj_align(lblSensors, LV_ALIGN_TOP_RIGHT, -20, 14);
 
-  // icon tiles
-  const char *icons[3] = { LV_SYMBOL_SETTINGS, LV_SYMBOL_AUDIO, LV_SYMBOL_POWER };
-  const char *names[3] = { "Massage", "Radio", "AC" };
-  const uint32_t cols[3] = { 0x2080FF, 0x30A060, 0xE08020 };
-  for (int i = 0; i < 3; i++) {
+  // ---- TEST 067: six photographic tiles, 3 across and 2 down ----
+  // Helper: make a tile at grid position (col,row) holding one image.
+  struct TilePos { int col, row; };
+  auto tileX = [](int c){ return TILE_X0 + c * (TILE_SZ + TILE_GAPX); };
+  auto tileY = [](int r){ return TILE_Y0 + r * (TILE_SZ + TILE_GAPY); };
+
+  auto makeTile = [&](int col, int row, uint32_t bg) {
     lv_obj_t *b = lv_btn_create(scrHome);
-    lv_obj_set_size(b, 235, 260);
-    lv_obj_align(b, LV_ALIGN_BOTTOM_LEFT, 22 + i * 252, -20);
-    lv_obj_set_style_bg_color(b, lv_color_hex(cols[i]), 0);
-    lv_obj_set_style_radius(b, 20, 0);
-    if (i == 0) lv_obj_add_event_cb(b, evGoMassage, LV_EVENT_CLICKED, NULL);
-    else if (i == 1) lv_obj_add_event_cb(b, evGoRadio, LV_EVENT_CLICKED, NULL);
-    else lv_obj_add_event_cb(b, evGoAC, LV_EVENT_CLICKED, NULL);
+    lv_obj_set_size(b, TILE_SZ, TILE_SZ);
+    lv_obj_set_pos(b, tileX(col), tileY(row));
+    lv_obj_set_style_bg_color(b, lv_color_hex(bg), 0);
+    lv_obj_set_style_radius(b, 16, 0);
+    lv_obj_set_style_pad_all(b, 0, 0);
+    lv_obj_set_style_shadow_width(b, 0, 0);
+    lv_obj_clear_flag(b, LV_OBJ_FLAG_SCROLLABLE);
+    return b;
+  };
 
-    lv_obj_t *ic = lv_label_create(b);
-    lv_label_set_text(ic, icons[i]);
-    lv_obj_set_style_text_font(ic, &lv_font_montserrat_40, 0);
-    lv_obj_set_style_text_color(ic, lv_color_white(), 0);
-    lv_obj_align(ic, LV_ALIGN_CENTER, 0, -30);
+  auto addImg = [&](lv_obj_t *parent, const lv_img_dsc_t *src) {
+    lv_obj_t *im = lv_img_create(parent);
+    lv_img_set_src(im, src);
+    lv_obj_center(im);
+    return im;
+  };
 
-    lv_obj_t *l = lv_label_create(b);
-    lv_label_set_text(l, names[i]);
-    lv_obj_set_style_text_font(l, &lv_font_montserrat_28, 0);
-    lv_obj_set_style_text_color(l, lv_color_white(), 0);
-    lv_obj_align(l, LV_ALIGN_CENTER, 0, 45);
-  }
+  // --- row 0: bed, radio, air conditioner ---
+  tileBed = makeTile(0, 0, 0x181C22);
+  tileBedImg = addImg(tileBed, &img_bed_off);
+  lv_obj_add_event_cb(tileBed, evGoMassage, LV_EVENT_CLICKED, NULL);
 
-  // gear -> settings
-  lv_obj_t *gear = lv_btn_create(scrHome);
-  lv_obj_set_size(gear, 60, 60);
-  lv_obj_align(gear, LV_ALIGN_TOP_RIGHT, -20, 60);
-  lv_obj_set_style_bg_color(gear, lv_color_hex(0x303840), 0);
-  lv_obj_set_style_radius(gear, 30, 0);
-  lv_obj_add_event_cb(gear, [](lv_event_t*e){ lv_scr_load(scrSettings); }, LV_EVENT_CLICKED, NULL);
-  lv_obj_t *gi = lv_label_create(gear);
-  lv_label_set_text(gi, LV_SYMBOL_SETTINGS);
-  lv_obj_set_style_text_font(gi, &lv_font_montserrat_28, 0);
-  lv_obj_center(gi);
+  tileRadio = makeTile(1, 0, 0x181C22);
+  tileRadioImg = addImg(tileRadio, &img_radio_off);
+  lv_obj_add_event_cb(tileRadio, evGoRadio, LV_EVENT_CLICKED, NULL);
 
-  // ---- TEST 054: microphone level meter along the bottom ----
-  micLbl = lv_label_create(scrHome);
-  lv_label_set_text(micLbl, "mic --");
-  lv_obj_set_style_text_font(micLbl, &lv_font_montserrat_20, 0);
-  lv_obj_set_style_text_color(micLbl, lv_color_hex(0x90C0E0), 0);
-  lv_obj_align(micLbl, LV_ALIGN_BOTTOM_LEFT, 20, -12);
+  tileAC = makeTile(2, 0, 0x181C22);
+  tileACImg = addImg(tileAC, &img_ac_off);
+  lv_obj_add_event_cb(tileAC, evTileACPressed,  LV_EVENT_PRESSED, NULL);
+  lv_obj_add_event_cb(tileAC, evTileACLong,     LV_EVENT_LONG_PRESSED, NULL);
+  lv_obj_add_event_cb(tileAC, evTileACReleased, LV_EVENT_RELEASED, NULL);
 
-  uttLbl = lv_label_create(scrHome);
-  lv_label_set_text(uttLbl, "no word yet");
-  lv_obj_set_style_text_font(uttLbl, &lv_font_montserrat_20, 0);
-  lv_obj_set_style_text_color(uttLbl, lv_color_hex(0x8FE0A0), 0);
-  lv_obj_align(uttLbl, LV_ALIGN_BOTTOM_LEFT, 20, -44);
+  // --- row 1: light, shutters, settings ---
+  tileLamp = makeTile(0, 1, 0x14262C);
+  tileLampImg = addImg(tileLamp, &img_lamp);
+  lv_obj_add_event_cb(tileLamp, evTileLamp, LV_EVENT_CLICKED, NULL);
 
-  // TEST 059: Learn button - no serial monitor needed
-  lv_obj_t *learnBtn = lv_btn_create(scrHome);
-  lv_obj_set_size(learnBtn, 160, 44);
-  lv_obj_align(learnBtn, LV_ALIGN_BOTTOM_RIGHT, -20, -44);
-  lv_obj_set_style_bg_color(learnBtn, lv_color_hex(0x2E6F4E), 0);
-  lv_obj_add_event_cb(learnBtn, [](lv_event_t *e){ learnReference(); },
+  tileShade = makeTile(1, 1, 0x181C22);
+  tileShadeImg = addImg(tileShade, &img_shade_open);
+  lv_obj_add_event_cb(tileShade, evTileShade, LV_EVENT_CLICKED, NULL);
+
+  lv_obj_t *tileSet = makeTile(2, 1, 0x232A33);
+  lv_obj_add_event_cb(tileSet, [](lv_event_t *e){ lv_scr_load(scrSettings); },
                       LV_EVENT_CLICKED, NULL);
-  lv_obj_add_event_cb(learnBtn, [](lv_event_t *e){ clearReferences(); },
-                      LV_EVENT_LONG_PRESSED, NULL);
-  learnLbl = lv_label_create(learnBtn);
-  lv_label_set_text_fmt(learnLbl, "Learn 0/%d", REF_SLOTS);
-  lv_obj_set_style_text_font(learnLbl, &lv_font_montserrat_20, 0);
-  lv_obj_center(learnLbl);
+  lv_obj_t *si = lv_label_create(tileSet);
+  lv_label_set_text(si, LV_SYMBOL_SETTINGS);
+  lv_obj_set_style_text_font(si, &lv_font_montserrat_40, 0);
+  lv_obj_set_style_text_color(si, lv_color_hex(0x8A94A0), 0);
+  lv_obj_center(si);
+
+  refreshLampTile();
+  refreshShadeTile();
+  refreshACTile();
+  refreshBedTile();
+  refreshRadioTile();
+
+  // TEST 065: the microphone UI has been REMOVED from the home screen.
+  // The level bar and the "mic 12%" text were rewritten on every loop
+  // pass with text of changing width, which made LVGL reflow the whole
+  // screen constantly - that was the jitter. Voice detection still runs
+  // and still reports on serial; use the `mic` and `dsp` commands.
+  // Every write to these is NULL-guarded, so the voice code carries on
+  // untouched - it just has nowhere on screen to draw.
+  micLbl = NULL; micBar = NULL; uttLbl = NULL; learnLbl = NULL;
 
   // TEST 061: shown briefly when the wake word is recognised
   wakeBanner = lv_label_create(scrHome);
@@ -1524,12 +2048,6 @@ void buildHome() {
   lv_obj_set_style_text_color(wakeBanner, lv_color_hex(0x40E080), 0);
   lv_obj_align(wakeBanner, LV_ALIGN_CENTER, 0, 0);
   lv_obj_add_flag(wakeBanner, LV_OBJ_FLAG_HIDDEN);
-
-  micBar = lv_bar_create(scrHome);
-  lv_obj_set_size(micBar, 560, 22);
-  lv_obj_align(micBar, LV_ALIGN_BOTTOM_RIGHT, -20, -12);
-  lv_bar_set_range(micBar, 0, 100);
-  lv_bar_set_value(micBar, 0, LV_ANIM_OFF);
 }
 
 void buildMassage() {
@@ -1923,20 +2441,24 @@ void drawDiverClock(bool full){
              &dialBuf[(size_t)(CLK_REG_Y0 + y) * SCREEN_W + CLK_REG_X0],
              (size_t)CLK_REG_W * sizeof(uint16_t));
     }
-    cbDrawHand((hh*30+mm*0.5f)*D, 22, 120, 7, GGLOW, GCORE);
-    cbDrawHand((mm*6+ss*0.1f)*D,  26, 175, 5, GGLOW, GCORE);
-    cbDrawHand((ss*6)*D,          40, 195, 2, 0x1902, 0xA800);
-    cbFillCircle(CLOCK_CX - CLK_REG_X0, CLOCK_CY - CLK_REG_Y0, 10, GCORE);
-    cbFillCircle(CLOCK_CX - CLK_REG_X0, CLOCK_CY - CLK_REG_Y0,  5, 0xFFFF);
+    // TEST 066: pre-dimmed to SAVER_DIM. GCORE 0x2FE9 -> 0x1DE6,
+    // GGLOW 0x0BC5 -> 0x02C3, the red second hand and the white cap
+    // taken down by the same proportion.
+    // TEST 069: re-dimmed from 75 to 56 percent
+    cbDrawHand((hh*30+mm*0.5f)*D, 22, 120, 7, 0x0202, 0x1465);
+    cbDrawHand((mm*6+ss*0.1f)*D,  26, 175, 5, 0x0202, 0x1465);
+    cbDrawHand((ss*6)*D,          40, 195, 2, 0x0801, 0x5800);
+    cbFillCircle(CLOCK_CX - CLK_REG_X0, CLOCK_CY - CLK_REG_Y0, 10, 0x1465);
+    cbFillCircle(CLOCK_CX - CLK_REG_X0, CLOCK_CY - CLK_REG_Y0,  5, 0x8C71);
     gfx->draw16bitRGBBitmap(CLK_REG_X0, CLK_REG_Y0, clockBuf,
                             CLK_REG_W, CLK_REG_H);
   } else {
     // fallback: straight to the screen, as TEST 054 did
-    drawHand((hh*30+mm*0.5f)*D, 22, 120, 7, GGLOW, GCORE);
-    drawHand((mm*6+ss*0.1f)*D,  26, 175, 5, GGLOW, GCORE);
-    drawHand((ss*6)*D, 40, 195, 2, 0x1902, 0xA800);
-    gfx->fillCircle(CLOCK_CX,CLOCK_CY,10,GCORE);
-    gfx->fillCircle(CLOCK_CX,CLOCK_CY,5,0xFFFF);
+    drawHand((hh*30+mm*0.5f)*D, 22, 120, 7, 0x0202, 0x1465);
+    drawHand((mm*6+ss*0.1f)*D,  26, 175, 5, 0x0202, 0x1465);
+    drawHand((ss*6)*D, 40, 195, 2, 0x0801, 0x5800);
+    gfx->fillCircle(CLOCK_CX,CLOCK_CY,10,0x1465);
+    gfx->fillCircle(CLOCK_CX,CLOCK_CY,5,0x8C71);
   }
 
   // TEST 049: if the dial is not on screen, say why, on the screen.
@@ -1982,7 +2504,10 @@ void drawDiverClock(bool full){
     if (left < 0) left = 0;
     if (left + blockW > SCREEN_W) left = SCREEN_W - blockW;
 
-    gfx->setTextColor(0x37E9);              // no bg: the dial is redrawn anyway
+    // TEST 066: light blue, not green. 0x4CF7 is #60D0FF at 75 percent,
+    // matching the dimming applied to everything else on this screen.
+    // TEST 069: soft grey, not blue. 0x9D15 is about #98A0A8.
+    gfx->setTextColor(0x9D15);
     gfx->setFont(&TempBig);
     gfx->setCursor(left - bx, top - by);
     gfx->print(t);
@@ -2164,11 +2689,40 @@ void buildSettings() {
   lv_obj_set_size(tv, 800, 424);
   lv_obj_align(tv, LV_ALIGN_BOTTOM_MID, 0, 0);
 
+  // TEST 073: paint the tabview and its bar grey. Without this LVGL's
+  // light theme leaves them near white.
+  lv_obj_set_style_bg_color(tv, lv_color_hex(SET_PAGE_BG), 0);
+  lv_obj_set_style_bg_opa(tv, LV_OPA_COVER, 0);
+
+  lv_obj_t *tabbar = lv_tabview_get_tab_btns(tv);
+  lv_obj_set_style_bg_color(tabbar, lv_color_hex(SET_BAR_BG), 0);
+  lv_obj_set_style_bg_opa(tabbar, LV_OPA_COVER, 0);
+  lv_obj_set_style_text_color(tabbar, lv_color_hex(SET_DIM_COL), 0);
+  // the selected tab
+  lv_obj_set_style_text_color(tabbar, lv_color_hex(SET_TEXT_COL),
+                              LV_PART_ITEMS | LV_STATE_CHECKED);
+  lv_obj_set_style_bg_color(tabbar, lv_color_hex(SET_PAGE_BG),
+                            LV_PART_ITEMS | LV_STATE_CHECKED);
+  lv_obj_set_style_bg_opa(tabbar, LV_OPA_COVER,
+                          LV_PART_ITEMS | LV_STATE_CHECKED);
+
   lv_obj_t *tClock = lv_tabview_add_tab(tv, "Clock");
   lv_obj_t *tDisp  = lv_tabview_add_tab(tv, "Display");
   lv_obj_t *tMass  = lv_tabview_add_tab(tv, "Massage");
   lv_obj_t *tFiles = lv_tabview_add_tab(tv, "Files");
   lv_obj_t *tAbout = lv_tabview_add_tab(tv, "About");
+
+  // every page grey, and its default text light
+  lv_obj_t *pages[5] = { tClock, tDisp, tMass, tFiles, tAbout };
+  for (int i = 0; i < 5; i++) {
+    lv_obj_set_style_bg_color(pages[i], lv_color_hex(SET_PAGE_BG), 0);
+    lv_obj_set_style_bg_opa(pages[i], LV_OPA_COVER, 0);
+    lv_obj_set_style_text_color(pages[i], lv_color_hex(SET_TEXT_COL), 0);
+  }
+  // the scrollable container LVGL puts the pages in
+  lv_obj_t *cont = lv_tabview_get_content(tv);
+  lv_obj_set_style_bg_color(cont, lv_color_hex(SET_PAGE_BG), 0);
+  lv_obj_set_style_bg_opa(cont, LV_OPA_COVER, 0);
   // TEST 047: Clock 0, Display 1, Massage 2, Files 3, About 4
   lv_obj_add_event_cb(tv, evSettingsTab, LV_EVENT_VALUE_CHANGED, NULL);
 
@@ -2281,7 +2835,7 @@ void buildSettings() {
   lv_dropdown_set_selected(ddRandom,randomChar); lv_obj_add_event_cb(ddRandom,evRandom,LV_EVENT_VALUE_CHANGED,NULL);
   lv_obj_t *mn=lv_label_create(tMass); lv_label_set_text(mn,"(applies to bed box when linked)");
   lv_obj_set_style_text_font(mn,&lv_font_montserrat_20,0);
-  lv_obj_set_style_text_color(mn,lv_color_hex(0x7B90A0),0); lv_obj_align(mn,LV_ALIGN_TOP_LEFT,240,220);
+  lv_obj_set_style_text_color(mn,lv_color_hex(SET_DIM_COL),0); lv_obj_align(mn,LV_ALIGN_TOP_LEFT,240,220);
 
   // ---- Files ----
   fileList = lv_list_create(tFiles);
@@ -2306,15 +2860,22 @@ void buildSettings() {
   lv_obj_t *ab=lv_label_create(tAbout);
   char info[256];
   snprintf(info,sizeof(info),
-    "Ben Panel\nTEST %03d\n\nLight  : %s\nTemp/Press: %s\nHumidity: %s\nRTC    : %s\nTouch  : GT911",
+    "BG BEDROOM\nTEST %03d\n\n"
+    "Light    : %s\n"
+    "Temp/Hum : %s\n"
+    "Pressure : %s\n"
+    "RTC      : %s\n"
+    "Touch    : GT911\n\n"
+    "now: %.1f C   %.0f %%   %.0f hPa",
     TEST_NUMBER,
-    haveBH1750?"BH1750 ok":"absent",
-    haveBME280?(isBME?"BME280":"BMP280"):"absent",
-    (haveBME280&&isBME)?"yes":"no",
-    haveDS3231?"DS3231 ok":"none (manual)");
+    haveBH1750 ? "BH1750 ok" : "absent",
+    haveSHT31  ? "SHT31 ok"  : "absent",
+    haveBME280 ? (isBME ? "BME280 ok" : "BMP280 ok") : "absent",
+    haveDS3231 ? "DS3231 ok" : "none (manual)",
+    gTemp, gHum, gPress);
   lv_label_set_text(ab,info);
   lv_obj_set_style_text_font(ab,&lv_font_montserrat_20,0);
-  lv_obj_set_style_text_color(ab,lv_color_hex(0x90C0E0),0);
+  lv_obj_set_style_text_color(ab,lv_color_hex(SET_TEXT_COL),0);
   lv_obj_align(ab,LV_ALIGN_TOP_LEFT,30,20);
 
   // blank screen used behind full-screen photo previews
@@ -2322,8 +2883,435 @@ void buildSettings() {
   lv_obj_set_style_bg_color(scrBlank, lv_color_black(), 0);
 }
 
-void buildRadio() { buildPlaceholder(&scrRadio, "RADIO"); }
-void buildAC()    { buildPlaceholder(&scrAC, "AC"); }
+// ============================================================
+//  TEST 069: the radio screen
+// ============================================================
+void refreshRadio() {
+  if (radioNowLbl) {
+    if (radioPlaying && radioStation >= 0 && radioStation < 8)
+      lv_label_set_text_fmt(radioNowLbl, "playing  %s", RADIO[radioStation].name);
+    else
+      lv_label_set_text(radioNowLbl, "stopped");
+  }
+  if (radioVolLbl) lv_label_set_text_fmt(radioVolLbl, "Volume  %d", radioVolume);
+  for (int i = 0; i < 8; i++) {
+    if (!radioBtn[i]) continue;
+    bool on = (radioPlaying && radioStation == i);
+    lv_obj_set_style_border_width(radioBtn[i], on ? 4 : 0, 0);
+    lv_obj_set_style_border_color(radioBtn[i], lv_color_white(), 0);
+    lv_obj_set_style_bg_opa(radioBtn[i], on ? LV_OPA_COVER : 200, 0);
+  }
+  refreshRadioTile();
+}
+
+static void evRadioPlay(lv_event_t *e) {
+  int n = (int)(intptr_t)lv_event_get_user_data(e);
+  radioStation = n;
+  radioPlaying = true;
+  sendMsg(NODE_AUDIO, CMD_RADIO_PLAY, (uint8_t)n, 0);
+  refreshRadio();
+}
+static void evRadioStop(lv_event_t *e) {
+  radioPlaying = false;
+  radioStation = -1;
+  sendMsg(NODE_AUDIO, CMD_RADIO_STOP, 0, 0);
+  refreshRadio();
+}
+static void evRadioVol(lv_event_t *e) {
+  lv_obj_t *s = lv_event_get_target(e);
+  radioVolume = lv_slider_get_value(s);
+  sendMsg(NODE_AUDIO, CMD_RADIO_VOL, 0, (uint8_t)radioVolume);
+  refreshRadio();
+}
+static void evRadioSleep(lv_event_t *e) {
+  sendMsg(NODE_AUDIO, CMD_RADIO_SLEEP, 0, 30);
+  Serial.println("radio: sleep timer 30 minutes");
+}
+
+void buildRadio() {
+  scrRadio = lv_obj_create(NULL);
+  lv_obj_set_style_bg_color(scrRadio, lv_color_hex(0x101418), 0);
+  lv_obj_clear_flag(scrRadio, LV_OBJ_FLAG_SCROLLABLE);
+
+  lv_obj_t *back = lv_btn_create(scrRadio);
+  lv_obj_set_size(back, 90, 50);
+  lv_obj_align(back, LV_ALIGN_TOP_LEFT, 10, 10);
+  lv_obj_set_style_bg_color(back, lv_color_hex(0x303840), 0);
+  lv_obj_add_event_cb(back, evGoHome, LV_EVENT_CLICKED, NULL);
+  lv_obj_t *bl = lv_label_create(back);
+  lv_label_set_text(bl, "<");
+  lv_obj_set_style_text_font(bl, &lv_font_montserrat_28, 0);
+  lv_obj_center(bl);
+
+  radioNowLbl = lv_label_create(scrRadio);
+  lv_label_set_text(radioNowLbl, "stopped");
+  lv_obj_set_style_text_font(radioNowLbl, &lv_font_montserrat_28, 0);
+  lv_obj_set_style_text_color(radioNowLbl, lv_color_hex(0x8FE0A0), 0);
+  lv_obj_align(radioNowLbl, LV_ALIGN_TOP_MID, 30, 22);
+
+  // eight station tiles, 4 across and 2 down
+  const int SW = 178, SH = 84, SX0 = 20, SGX = 14, SY0 = 92, SGY = 12;
+  for (int i = 0; i < 8; i++) {
+    int c = i % 4, r = i / 4;
+    lv_obj_t *b = lv_btn_create(scrRadio);
+    radioBtn[i] = b;
+    lv_obj_set_size(b, SW, SH);
+    lv_obj_set_pos(b, SX0 + c * (SW + SGX), SY0 + r * (SH + SGY));
+    lv_obj_set_style_bg_color(b, lv_color_hex(RADIO[i].colour), 0);
+    lv_obj_set_style_radius(b, 12, 0);
+    lv_obj_add_event_cb(b, evRadioPlay, LV_EVENT_CLICKED, (void *)(intptr_t)i);
+    lv_obj_t *l = lv_label_create(b);
+    lv_label_set_text(l, RADIO[i].name);
+    lv_obj_set_style_text_font(l, &lv_font_montserrat_20, 0);
+    lv_obj_set_style_text_color(l, lv_color_white(), 0);
+    lv_obj_center(l);
+  }
+
+  // volume
+  radioVolLbl = lv_label_create(scrRadio);
+  lv_label_set_text_fmt(radioVolLbl, "Volume  %d", radioVolume);
+  lv_obj_set_style_text_font(radioVolLbl, &lv_font_montserrat_20, 0);
+  lv_obj_set_style_text_color(radioVolLbl, lv_color_hex(0x90A0B0), 0);
+  lv_obj_set_pos(radioVolLbl, 22, 296);
+
+  lv_obj_t *sl = lv_slider_create(scrRadio);
+  lv_obj_set_size(sl, 470, 22);
+  lv_obj_set_pos(sl, 22, 326);
+  lv_slider_set_range(sl, 0, 21);
+  lv_slider_set_value(sl, radioVolume, LV_ANIM_OFF);
+  lv_obj_add_event_cb(sl, evRadioVol, LV_EVENT_VALUE_CHANGED, NULL);
+
+  // sleep and stop
+  lv_obj_t *sleepB = lv_btn_create(scrRadio);
+  lv_obj_set_size(sleepB, 150, 60);
+  lv_obj_set_pos(sleepB, 520, 306);
+  lv_obj_set_style_bg_color(sleepB, lv_color_hex(0x2A3346), 0);
+  lv_obj_add_event_cb(sleepB, evRadioSleep, LV_EVENT_CLICKED, NULL);
+  lv_obj_t *sll2 = lv_label_create(sleepB);
+  lv_label_set_text(sll2, "Sleep 30");
+  lv_obj_set_style_text_font(sll2, &lv_font_montserrat_20, 0);
+  lv_obj_center(sll2);
+
+  lv_obj_t *stopB = lv_btn_create(scrRadio);
+  lv_obj_set_size(stopB, 100, 60);
+  lv_obj_set_pos(stopB, 682, 306);
+  lv_obj_set_style_bg_color(stopB, lv_color_hex(0x8A3A3A), 0);
+  lv_obj_add_event_cb(stopB, evRadioStop, LV_EVENT_CLICKED, NULL);
+  lv_obj_t *stl = lv_label_create(stopB);
+  lv_label_set_text(stl, "Stop");
+  lv_obj_set_style_text_font(stl, &lv_font_montserrat_20, 0);
+  lv_obj_center(stl);
+
+  // Spotify - honest about not being connected
+  lv_obj_t *sp = lv_label_create(scrRadio);
+  lv_label_set_text(sp, "Spotify: not connected - needs cspot on the audio node");
+  lv_obj_set_style_text_font(sp, &lv_font_montserrat_20, 0);
+  lv_obj_set_style_text_color(sp, lv_color_hex(0x556070), 0);
+  lv_obj_align(sp, LV_ALIGN_BOTTOM_MID, 0, -34);
+
+  lv_obj_t *nb = lv_label_create(scrRadio);
+  lv_label_set_text(nb, "nothing plays yet - the audio node is not built");
+  lv_obj_set_style_text_font(nb, &lv_font_montserrat_20, 0);
+  lv_obj_set_style_text_color(nb, lv_color_hex(0x556070), 0);
+  lv_obj_align(nb, LV_ALIGN_BOTTOM_MID, 0, -10);
+
+  refreshRadio();
+}
+
+// ============================================================
+//  TEST 063: AC screen - drives the Switcher Breeze
+// ============================================================
+static const char *AC_MODE_NAME[5] = { "Cool", "Heat", "Dry", "Fan", "Auto" };
+static const char *AC_FAN_NAME[4]  = { "Low", "Med", "High", "Auto" };
+
+void refreshAC() {
+  if (acLblTemp)
+    lv_label_set_text_fmt(acLblTemp, "%d", acTemp);
+  if (acLblPower) {
+    lv_label_set_text(acLblPower, acPower ? "ON" : "OFF");
+    lv_obj_set_style_text_color(acLblPower,
+      lv_color_hex(acPower ? 0x40E080 : 0x808890), 0);
+  }
+  if (acLblRoom) {
+    // TEST 074: whole degrees, to match the big target number
+    if (tempOK) lv_label_set_text_fmt(acLblRoom, "%d", (int)lroundf(gTemp));
+    else        lv_label_set_text(acLblRoom, "--");
+  }
+  for (int i = 0; i < 5; i++) if (acModeBtn[i])
+    lv_obj_set_style_bg_color(acModeBtn[i],
+      lv_color_hex(i == acMode ? 0x2080FF : 0x2A3346), 0);
+  for (int i = 0; i < 4; i++) if (acFanBtn[i])
+    lv_obj_set_style_bg_color(acFanBtn[i],
+      lv_color_hex(i == acFan ? 0x2080FF : 0x2A3346), 0);
+  if (acSwingBtn)
+    lv_obj_set_style_bg_color(acSwingBtn,
+      lv_color_hex(acSwing ? 0x2E6F4E : 0x2A3346), 0);
+}
+
+static void evAcPower(lv_event_t *e) {
+  acPower = !acPower;
+  sendMsg(NODE_AUDIO, CMD_AC_POWER, 0, acPower ? 1 : 0);
+  refreshAC();
+}
+static void evAcTemp(lv_event_t *e) {
+  int delta = (int)(intptr_t)lv_event_get_user_data(e);
+  acTemp += delta;
+  if (acTemp < AC_TEMP_MIN) acTemp = AC_TEMP_MIN;
+  if (acTemp > AC_TEMP_MAX) acTemp = AC_TEMP_MAX;
+  sendMsg(NODE_AUDIO, CMD_AC_TEMP, 0, (uint8_t)acTemp);
+  refreshAC();
+}
+static void evAcMode(lv_event_t *e) {
+  acMode = (int)(intptr_t)lv_event_get_user_data(e);
+  sendMsg(NODE_AUDIO, CMD_AC_MODE, 0, (uint8_t)acMode);
+  refreshAC();
+}
+static void evAcFan(lv_event_t *e) {
+  acFan = (int)(intptr_t)lv_event_get_user_data(e);
+  sendMsg(NODE_AUDIO, CMD_AC_FAN, 0, (uint8_t)acFan);
+  refreshAC();
+}
+static void evAcSwing(lv_event_t *e) {
+  acSwing = !acSwing;
+  sendMsg(NODE_AUDIO, CMD_AC_SWING, 0, acSwing ? 1 : 0);
+  refreshAC();
+}
+
+static lv_obj_t *mkBtn(lv_obj_t *par, int x, int y, int w, int h,
+                       const char *text, lv_event_cb_t cb, int userData,
+                       const lv_font_t *font) {
+  lv_obj_t *b = lv_btn_create(par);
+  lv_obj_set_size(b, w, h);
+  lv_obj_set_pos(b, x, y);
+  lv_obj_set_style_bg_color(b, lv_color_hex(0x2A3346), 0);
+  lv_obj_set_style_radius(b, 10, 0);
+  lv_obj_add_event_cb(b, cb, LV_EVENT_CLICKED, (void *)(intptr_t)userData);
+  lv_obj_t *l = lv_label_create(b);
+  lv_label_set_text(l, text);
+  lv_obj_set_style_text_font(l, font, 0);
+  lv_obj_set_style_text_color(l, lv_color_white(), 0);
+  lv_obj_center(l);
+  return b;
+}
+
+void buildAC() {
+  scrAC = lv_obj_create(NULL);
+  lv_obj_set_style_bg_color(scrAC, lv_color_hex(0x101418), 0);
+  lv_obj_clear_flag(scrAC, LV_OBJ_FLAG_SCROLLABLE);
+
+  lv_obj_t *back = lv_btn_create(scrAC);
+  lv_obj_set_size(back, 90, 50);
+  lv_obj_align(back, LV_ALIGN_TOP_LEFT, 10, 10);
+  lv_obj_set_style_bg_color(back, lv_color_hex(0x303840), 0);
+  lv_obj_add_event_cb(back, evGoHome, LV_EVENT_CLICKED, NULL);
+  lv_obj_t *bl = lv_label_create(back);
+  lv_label_set_text(bl, "<");
+  lv_obj_set_style_text_font(bl, &lv_font_montserrat_28, 0);
+  lv_obj_center(bl);
+
+  lv_obj_t *ttl = lv_label_create(scrAC);
+  lv_label_set_text(ttl, "Air Conditioner");
+  lv_obj_set_style_text_font(ttl, &lv_font_montserrat_28, 0);
+  lv_obj_set_style_text_color(ttl, lv_color_white(), 0);
+  lv_obj_align(ttl, LV_ALIGN_TOP_MID, 0, 20);
+
+  // power, top right
+  lv_obj_t *pw = lv_btn_create(scrAC);
+  lv_obj_set_size(pw, 130, 50);
+  lv_obj_align(pw, LV_ALIGN_TOP_RIGHT, -14, 10);
+  lv_obj_set_style_bg_color(pw, lv_color_hex(0x303840), 0);
+  lv_obj_add_event_cb(pw, evAcPower, LV_EVENT_CLICKED, NULL);
+  acLblPower = lv_label_create(pw);
+  lv_label_set_text(acLblPower, "OFF");
+  lv_obj_set_style_text_font(acLblPower, &lv_font_montserrat_28, 0);
+  lv_obj_center(acLblPower);
+
+  // big target temperature with - and +
+  mkBtn(scrAC, 120, 90, 90, 90, "-", evAcTemp, -1, &lv_font_montserrat_40);
+  mkBtn(scrAC, 400, 90, 90, 90, "+", evAcTemp, +1, &lv_font_montserrat_40);
+
+  acLblTemp = lv_label_create(scrAC);
+  lv_label_set_text_fmt(acLblTemp, "%d", acTemp);
+  lv_obj_set_style_text_font(acLblTemp, &lv_font_montserrat_40, 0);
+  lv_obj_set_style_text_color(acLblTemp, lv_color_hex(0x60D0FF), 0);
+  lv_obj_set_pos(acLblTemp, 275, 110);
+
+  lv_obj_t *cu = lv_label_create(scrAC);
+  lv_label_set_text(cu, "C");
+  lv_obj_set_style_text_font(cu, &lv_font_montserrat_28, 0);
+  lv_obj_set_style_text_color(cu, lv_color_hex(0x60D0FF), 0);
+  lv_obj_set_pos(cu, 340, 120);
+
+  // TEST 074: the room temperature, to the RIGHT OF THE + BUTTON.
+  // The + sits at x 400..490, so this starts at 530.
+  lv_obj_t *roomCap = lv_label_create(scrAC);
+  lv_label_set_text(roomCap, "room");
+  lv_obj_set_style_text_font(roomCap, &lv_font_montserrat_20, 0);
+  lv_obj_set_style_text_color(roomCap, lv_color_hex(0x7B90A0), 0);
+  lv_obj_set_pos(roomCap, 546, 86);
+
+  acLblRoom = lv_label_create(scrAC);
+  lv_label_set_text(acLblRoom, "--");
+  lv_obj_set_style_text_font(acLblRoom, &lv_font_montserrat_40, 0);
+  lv_obj_set_style_text_color(acLblRoom, lv_color_hex(0x8FE0A0), 0);
+  lv_obj_set_pos(acLblRoom, 546, 112);
+
+  lv_obj_t *roomC = lv_label_create(scrAC);
+  lv_label_set_text(roomC, "c");
+  lv_obj_set_style_text_font(roomC, &lv_font_montserrat_20, 0);
+  lv_obj_set_style_text_color(roomC, lv_color_hex(0x8FE0A0), 0);
+  lv_obj_set_pos(roomC, 630, 140);
+
+  lv_obj_t *roomNote = lv_label_create(scrAC);
+  lv_label_set_text(roomNote, "measured here");
+  lv_obj_set_style_text_font(roomNote, &lv_font_montserrat_20, 0);
+  lv_obj_set_style_text_color(roomNote, lv_color_hex(0x556070), 0);
+  lv_obj_set_pos(roomNote, 546, 168);
+
+  // mode row
+  lv_obj_t *ml = lv_label_create(scrAC);
+  lv_label_set_text(ml, "Mode");
+  lv_obj_set_style_text_font(ml, &lv_font_montserrat_20, 0);
+  lv_obj_set_style_text_color(ml, lv_color_hex(0x7B90A0), 0);
+  lv_obj_set_pos(ml, 20, 205);
+  for (int i = 0; i < 5; i++)
+    acModeBtn[i] = mkBtn(scrAC, 100 + i * 138, 195, 128, 58,
+                         AC_MODE_NAME[i], evAcMode, i, &lv_font_montserrat_20);
+
+  // fan row
+  lv_obj_t *fl = lv_label_create(scrAC);
+  lv_label_set_text(fl, "Fan");
+  lv_obj_set_style_text_font(fl, &lv_font_montserrat_20, 0);
+  lv_obj_set_style_text_color(fl, lv_color_hex(0x7B90A0), 0);
+  lv_obj_set_pos(fl, 20, 285);
+  for (int i = 0; i < 4; i++)
+    acFanBtn[i] = mkBtn(scrAC, 100 + i * 138, 275, 128, 58,
+                        AC_FAN_NAME[i], evAcFan, i, &lv_font_montserrat_20);
+
+  // swing
+  lv_obj_t *sl = lv_label_create(scrAC);
+  lv_label_set_text(sl, "Swing");
+  lv_obj_set_style_text_font(sl, &lv_font_montserrat_20, 0);
+  lv_obj_set_style_text_color(sl, lv_color_hex(0x7B90A0), 0);
+  lv_obj_set_pos(sl, 20, 365);
+  acSwingBtn = mkBtn(scrAC, 100, 355, 128, 58, "Swing",
+                     evAcSwing, 0, &lv_font_montserrat_20);
+
+  lv_obj_t *note = lv_label_create(scrAC);
+  lv_label_set_text(note, "shows what was last commanded - this AC does not report back");
+  lv_obj_set_style_text_font(note, &lv_font_montserrat_20, 0);
+  lv_obj_set_style_text_color(note, lv_color_hex(0x556070), 0);
+  lv_obj_align(note, LV_ALIGN_BOTTOM_MID, 0, -8);
+
+  refreshAC();
+}
+
+// ============================================================
+//  TEST 063: Room screen - shades and light over 433 MHz
+// ============================================================
+void refreshRoom() {
+  if (shadeLbl) {
+    if (shadeMoving == 1)      lv_label_set_text(shadeLbl, "going up - press again to stop");
+    else if (shadeMoving == 2) lv_label_set_text(shadeLbl, "going down - press again to stop");
+    else                       lv_label_set_text(shadeLbl, "stopped");
+  }
+  if (shadeUpBtn)
+    lv_obj_set_style_bg_color(shadeUpBtn,
+      lv_color_hex(shadeMoving == 1 ? 0x2080FF : 0x2A3346), 0);
+  if (shadeDownBtn)
+    lv_obj_set_style_bg_color(shadeDownBtn,
+      lv_color_hex(shadeMoving == 2 ? 0x2080FF : 0x2A3346), 0);
+  if (lightBtn)
+    lv_obj_set_style_bg_color(lightBtn,
+      lv_color_hex(lightOn ? 0xE0A020 : 0x2A3346), 0);
+  if (lightLbl)
+    lv_label_set_text(lightLbl, lightOn ? "Light ON" : "Light OFF");
+}
+
+static void evShade(lv_event_t *e) {
+  int want = (int)(intptr_t)lv_event_get_user_data(e);   // 1 up, 2 down
+  if (shadeMoving != 0) {
+    // already moving - this press means STOP, whichever button it was
+    sendMsg(NODE_AUDIO, CMD_RF, 0, 0);
+    shadeMoving = 0;
+  } else {
+    sendMsg(NODE_AUDIO, CMD_RF, 0, (uint8_t)want);
+    shadeMoving = want;
+    shadeStartMs = millis();
+  }
+  refreshRoom();
+}
+
+static void evLight(lv_event_t *e) {
+  lightOn = !lightOn;
+  sendMsg(NODE_AUDIO, CMD_RF, 1, lightOn ? 1 : 0);
+  refreshRoom();
+}
+
+void buildRoom() {
+  scrRoom = lv_obj_create(NULL);
+  lv_obj_set_style_bg_color(scrRoom, lv_color_hex(0x101418), 0);
+  lv_obj_clear_flag(scrRoom, LV_OBJ_FLAG_SCROLLABLE);
+
+  lv_obj_t *back = lv_btn_create(scrRoom);
+  lv_obj_set_size(back, 90, 50);
+  lv_obj_align(back, LV_ALIGN_TOP_LEFT, 10, 10);
+  lv_obj_set_style_bg_color(back, lv_color_hex(0x303840), 0);
+  lv_obj_add_event_cb(back, evGoHome, LV_EVENT_CLICKED, NULL);
+  lv_obj_t *bl = lv_label_create(back);
+  lv_label_set_text(bl, "<");
+  lv_obj_set_style_text_font(bl, &lv_font_montserrat_28, 0);
+  lv_obj_center(bl);
+
+  lv_obj_t *ttl = lv_label_create(scrRoom);
+  lv_label_set_text(ttl, "Room");
+  lv_obj_set_style_text_font(ttl, &lv_font_montserrat_28, 0);
+  lv_obj_set_style_text_color(ttl, lv_color_white(), 0);
+  lv_obj_align(ttl, LV_ALIGN_TOP_MID, 0, 20);
+
+  lv_obj_t *sh = lv_label_create(scrRoom);
+  lv_label_set_text(sh, "Shades");
+  lv_obj_set_style_text_font(sh, &lv_font_montserrat_28, 0);
+  lv_obj_set_style_text_color(sh, lv_color_hex(0x7B90A0), 0);
+  lv_obj_set_pos(sh, 60, 100);
+
+  shadeUpBtn   = mkBtn(scrRoom, 60,  150, 180, 130, LV_SYMBOL_UP,
+                       evShade, 1, &lv_font_montserrat_40);
+  shadeDownBtn = mkBtn(scrRoom, 260, 150, 180, 130, LV_SYMBOL_DOWN,
+                       evShade, 2, &lv_font_montserrat_40);
+
+  shadeLbl = lv_label_create(scrRoom);
+  lv_label_set_text(shadeLbl, "stopped");
+  lv_obj_set_style_text_font(shadeLbl, &lv_font_montserrat_20, 0);
+  lv_obj_set_style_text_color(shadeLbl, lv_color_hex(0x8FE0A0), 0);
+  lv_obj_set_pos(shadeLbl, 60, 295);
+
+  lv_obj_t *li = lv_label_create(scrRoom);
+  lv_label_set_text(li, "Light");
+  lv_obj_set_style_text_font(li, &lv_font_montserrat_28, 0);
+  lv_obj_set_style_text_color(li, lv_color_hex(0x7B90A0), 0);
+  lv_obj_set_pos(li, 530, 100);
+
+  lightBtn = lv_btn_create(scrRoom);
+  lv_obj_set_size(lightBtn, 210, 130);
+  lv_obj_set_pos(lightBtn, 530, 150);
+  lv_obj_set_style_bg_color(lightBtn, lv_color_hex(0x2A3346), 0);
+  lv_obj_set_style_radius(lightBtn, 10, 0);
+  lv_obj_add_event_cb(lightBtn, evLight, LV_EVENT_CLICKED, NULL);
+  lightLbl = lv_label_create(lightBtn);
+  lv_label_set_text(lightLbl, "Light OFF");
+  lv_obj_set_style_text_font(lightLbl, &lv_font_montserrat_28, 0);
+  lv_obj_set_style_text_color(lightLbl, lv_color_white(), 0);
+  lv_obj_center(lightLbl);
+
+  lv_obj_t *note = lv_label_create(scrRoom);
+  lv_label_set_text(note, "433 MHz - one way, so the panel shows what it commanded");
+  lv_obj_set_style_text_font(note, &lv_font_montserrat_20, 0);
+  lv_obj_set_style_text_color(note, lv_color_hex(0x556070), 0);
+  lv_obj_align(note, LV_ALIGN_BOTTOM_MID, 0, -8);
+
+  refreshRoom();
+}
 
 
 // ============================================================
@@ -2363,20 +3351,19 @@ void updateSensorLabel() {
       pressRef = gPress; pressRefMs = millis();
     }
   }
-  const char *arrow = (pressTrend > 0) ? LV_SYMBOL_UP :
-                      (pressTrend < 0) ? LV_SYMBOL_DOWN : "=";
+  // TEST 068: the home screen shows the TIME and the TEMPERATURE and
+  // nothing else. Pressure, its trend arrow, humidity and the degree
+  // letter are gone from here - all still measured, all still on the
+  // About tab and on serial.
+  long sod = nowSecOfDay();
+  int hh = (int)((sod / 3600) % 24);
+  int mm = (int)((sod / 60) % 60);
 
-  // TEST 062: temperature and humidity from the SHT31, pressure from the
-  // BMP280. Showing the pressure NUMBER means the display says something
-  // useful even when the trend is steady.
-  char line[64];
-  if (tempOK && humOK)
-    snprintf(line, sizeof(line), "%.1f C  %.0f%%  %.0f %s",
-             gTemp, gHum, gPress, arrow);
-  else if (tempOK)
-    snprintf(line, sizeof(line), "%.1f C  %.0f %s", gTemp, gPress, arrow);
+  char line[48];
+  if (tempOK)
+    snprintf(line, sizeof(line), "%02d:%02d    %.0f", hh, mm, gTemp);
   else
-    snprintf(line, sizeof(line), "-- C");
+    snprintf(line, sizeof(line), "%02d:%02d    --", hh, mm);
   lv_label_set_text(lblSensors, line);
 }
 
@@ -2714,6 +3701,7 @@ void setup() {
   buildMassage();
   buildRadio();
   buildAC();
+  buildRoom();
   buildSettings();
   buildClock();
   buildAnalog();
@@ -2733,6 +3721,7 @@ void loop() {
 
   if (state == ST_UI) {
     lv_timer_handler();
+    animateTiles();          // TEST 064: lamp colour cycle, shade travel
 
     if (millis() - lastSensorMs > 1000) {
       lastSensorMs = millis();
@@ -2746,6 +3735,19 @@ void loop() {
       }
       computeTargetFromLux();
       updateSensorLabel();
+      // TEST 063: the shade has no feedback. If the panel still thinks
+      // it is moving long after it should have finished, give up, or the
+      // next press would send STOP when the user means UP.
+      if (shadeMoving && (millis() - shadeStartMs) > SHADE_TIMEOUT_MS) {
+        shadeMoving = 0;
+        Serial.println("shade: movement timed out, assuming stopped");
+        refreshRoom();
+      }
+      // TEST 065: only touch the AC screen's widgets while it is the
+      // screen actually on show. Restyling hidden objects every second
+      // was invalidating LVGL for no reason.
+      if (lv_scr_act() == scrAC) refreshAC();
+
       // TEST 054: one line a second, so a silent mic is obvious
       if (micReady)
         Serial.printf("mic: rms %.4f  peak %.4f  reads %u\n",
@@ -2758,13 +3760,6 @@ void loop() {
       if (wakeBanner) lv_obj_add_flag(wakeBanner, LV_OBJ_FLAG_HIDDEN);
     }
 
-    if (micBar) {
-      int pct = (int)(micRms * 400.0f);        // x4 so speech is visible
-      if (pct > 100) pct = 100;
-      lv_bar_set_value(micBar, pct, LV_ANIM_OFF);
-      if (micLbl)
-        lv_label_set_text_fmt(micLbl, "mic %d%%", pct);
-    }
     if (millis() - lastEaseMs > 25) { lastEaseMs = millis(); easeBacklight(); }
 
     // Random preset: character from settings
@@ -2845,5 +3840,5 @@ void loop() {
  *    time HH:MM  sets the clock AND writes it to the DS3231, so it
  *              now survives a power cut
  * ============================================================
- *                  TEST  062   (end of file)
+ *                  TEST  074   (end of file)
  * ============================================================ */
