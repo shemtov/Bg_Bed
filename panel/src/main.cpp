@@ -1,6 +1,44 @@
 /* ============================================================
- *                        TEST  074
+ *                        TEST  078
  * ============================================================
+ *  TEST 078 - CLOCK TAB SPACING
+ *    The time row was 220 px tall to hold 64 px buttons, so the
+ *    date row landed inside it. The time row is now only as tall
+ *    as it needs to be, and the date sits well clear below it.
+ *
+ *  TEST 077 - THE SLIDERS FOLLOW THE PATTERN
+ *    The panel has always talked down the wire and never listened.
+ *    It listens now. The bed box (TEST 012) sends one frame per
+ *    zone whenever a level changes - {bedId, 20, zone, level} -
+ *    and the four upright sliders track it live. Pick a mode and
+ *    you watch the massage travel down the screen as it travels
+ *    down the bed.
+ *    The Hebrew words under the sliders are gone. At 30 px wide
+ *    they were unreadable, so the columns are simply numbered
+ *    1 to 4, head at the left.
+ *
+ *  TEST 076 - THE DATE CAN BE SET FROM THE SCREEN
+ *    Settings, Clock tab, gains a second row: day, month and
+ *    year, with the same plus and minus buttons as the time,
+ *    and one button that writes both rows to the DS3231.
+ *    The date is seeded from the chip when the tab is built,
+ *    and the month length is respected, February included.
+ *
+ *  TEST 075 - THE MASSAGE SCREEN REBUILT
+ *    The bed selector is gone. Ira is not using the system, so
+ *    every command goes to bed 1 and there is nothing to choose.
+ *    The demo is gone with it.
+ *    Top right: the time, the date and the temperature with a
+ *    small c, in that order.
+ *    Twelve mode tiles, four across and three down, on the left.
+ *    Colour is by family, not by sequence: green rows travel
+ *    along the body, purple crosses it, orange is rhythm and
+ *    atmosphere. The running mode is lit and outlined.
+ *    Four zone sliders now stand UPRIGHT down the right side.
+ *    Bottom row unchanged: 15, 30, 60 and off.
+ *    Colours are deep and saturated rather than bright - this is
+ *    a screen that gets looked at in the dark.
+ * ------------------------------------------------------------
  *  PANEL FIRMWARE  (ESP32-8048S043, ESP32-S3-WROOM-1 N16R8)
  *  Adjustable Bed Massage Retrofit - Revision 4
  *  Stage 3: LVGL UI - home + massage + settings + screensaver
@@ -539,7 +577,7 @@
 #include <lvgl.h>
 #include <Preferences.h>
 
-#define TEST_NUMBER 74
+#define TEST_NUMBER 78
 
 // ---- backlight ----
 #define GFX_BL 2
@@ -820,8 +858,12 @@ void refreshRoom();
 void refreshBedTile();
 void refreshRadioTile();
 void refreshRadio();
-void buildBedSelector();
+void buildBedSelector();            // TEST 075: no longer called, kept for reference
 void refreshBedButtons();
+uint8_t bcd2dec(uint8_t b);         // TEST 075: needed by ds3231GetDate above
+uint8_t dec2bcd(uint8_t d);
+void ds3231GetDate(int &d, int &m, int &y);
+void ds3231SetDate(int d, int m, int y);
 void buildSettings();
 void loadSettings();
 void saveSettings();
@@ -1824,10 +1866,43 @@ static void evZoneSlider(lv_event_t *e) {
   if (lv_event_get_code(e) == LV_EVENT_RELEASED)
     sendMsg(curBedId, CMD_ZONE, zone, v);
 }
+// TEST 075: twelve tiles. Eleven of them are bed box patterns 0..10.
+// The twelfth, "full", is not a pattern at all - it is simply every
+// motor at once, so it needs nothing new at the bed box end.
+lv_obj_t *patTile[12] = {NULL};
+int activePattern = -1;                 // -1 = none lit
+
+const uint8_t PAT_MAP[12] = { 0, 1, 2, 255, 3, 4, 5, 6, 7, 8, 9, 10 };
+
+const uint32_t PAT_BG_ON[3]  = { 0x0F6E56, 0x534AB7, 0x993C1D };
+const uint32_t PAT_BG_OFF[3] = { 0x0B3D31, 0x2E2870, 0x6B2A14 };
+const uint32_t PAT_TX_ON[3]  = { 0x9FE1CB, 0xCECBF6, 0xF5C4B3 };
+const uint32_t PAT_TX_OFF[3] = { 0x5DCAA5, 0xAFA9EC, 0xF0997B };
+
+void refreshPatTiles() {
+  for (int i = 0; i < 12; i++) {
+    if (!patTile[i]) continue;
+    int row = i / 4;
+    bool on = (i == activePattern);
+    lv_obj_set_style_bg_color(patTile[i],
+      lv_color_hex(on ? PAT_BG_ON[row] : PAT_BG_OFF[row]), 0);
+    lv_obj_set_style_border_width(patTile[i], on ? 3 : 0, 0);
+    lv_obj_set_style_border_color(patTile[i], lv_color_hex(PAT_TX_ON[row]), 0);
+    lv_obj_t *l = lv_obj_get_child(patTile[i], 0);
+    if (l) lv_obj_set_style_text_color(l,
+             lv_color_hex(on ? PAT_TX_ON[row] : PAT_TX_OFF[row]), 0);
+  }
+}
+
 static void evPreset(lv_event_t *e) {
-  int p = (int)(intptr_t)lv_event_get_user_data(e);
-  if (p == 3) { randomActive = true; lastRandomMs = 0; Serial.println("Random preset ON"); }
-  else { randomActive = false; sendMsg(curBedId, CMD_PRESET, p, 60); }
+  int i = (int)(intptr_t)lv_event_get_user_data(e);
+  randomActive = false;                 // the bed box owns randomness now
+  activePattern = i;
+  refreshPatTiles();
+  if (PAT_MAP[i] == 255) sendMsg(curBedId, CMD_ALL, 0, 100);
+  else                   sendMsg(curBedId, CMD_PRESET, PAT_MAP[i], 60);
+  Serial.printf("mode tile %d -> %s\n", i,
+                PAT_MAP[i] == 255 ? "ALL 100" : "preset");
 }
 static void evTimer(lv_event_t *e) {
   int mins = (int)(intptr_t)lv_event_get_user_data(e);
@@ -1835,6 +1910,8 @@ static void evTimer(lv_event_t *e) {
 }
 static void evOff(lv_event_t *e) {
   randomActive = false;
+  activePattern = -1;
+  refreshPatTiles();
   sendMsg(curBedId, CMD_OFF, 0, 0);
   for (int z = 0; z < 4; z++) {
     lv_slider_set_value(sliderZone[z], 0, LV_ANIM_ON);
@@ -2050,90 +2127,239 @@ void buildHome() {
   lv_obj_add_flag(wakeBanner, LV_OBJ_FLAG_HIDDEN);
 }
 
+// ============================================================
+//  TEST 075: Hebrew labels for the massage screen.
+//  LVGL is built with LV_CONF_SKIP, so bidirectional text is off
+//  and every Hebrew string has to be stored PRE-REVERSED, exactly
+//  as font_hebrew.h already does for HEB_BEDROOM and HEB_MAZGAN.
+//  The comment after each line is the word the right way round.
+// ============================================================
+#define Z_HEAD       "שאר"   // ראש
+#define Z_UPPER      "ןוילע בג"   // גב עליון
+#define Z_LOWER      "ןותחת בג"   // גב תחתון
+#define Z_LEGS       "םיילגר"   // רגליים
+#define P_MAPAL      "לפמ"   // מפל
+#define P_ALIYA      "היילע"   // עלייה
+#define P_NADNEDA    "הדנדנ"   // נדנדה
+#define P_MALE       "אלמ"   // מלא
+#define P_ALACHSON   "ןוסכלא"   // אלכסון
+#define P_TZAD       "דצ"   // צד
+#define P_SICHRUR    "רורחס"   // סחרור
+#define P_LISHA      "השיל"   // לישה
+#define P_DOFEK      "קפוד"   // דופק
+#define P_NESHIMA    "המישנ"   // נשימה
+#define P_GESHEM     "םשג"   // גשם
+#define P_AKRAI      "יארקא"   // אקראי
+#define M_OFF        "יוביכ"   // כיבוי
+
+// TEST 075: the DS3231 also holds a date, which nothing has read
+// until now. Registers 0x04 day, 0x05 month (bit 7 = century),
+// 0x06 year since 2000. If the date has never been set it will
+// read as rubbish - use  date DD MM YY  on the serial console.
+void ds3231GetDate(int &d, int &m, int &y) {
+  d = 0; m = 0; y = 0;
+  Wire.beginTransmission(DS3231_ADDR);
+  Wire.write(0x04);
+  if (Wire.endTransmission(false) != 0) return;
+  if (Wire.requestFrom(DS3231_ADDR, 3) != 3) return;
+  d = bcd2dec(Wire.read() & 0x3F);
+  m = bcd2dec(Wire.read() & 0x1F);
+  y = bcd2dec(Wire.read());
+}
+void ds3231SetDate(int d, int m, int y) {
+  Wire.beginTransmission(DS3231_ADDR);
+  Wire.write(0x04);
+  Wire.write(dec2bcd(d));
+  Wire.write(dec2bcd(m));
+  Wire.write(dec2bcd(y));
+  Wire.endTransmission();
+}
+
+lv_obj_t *lblMassTime = NULL, *lblMassDate = NULL, *lblMassTemp = NULL;
+
+// ---- TEST 077: the return path from the bed box ----
+// One four-byte frame per zone, {bedId, 20, zone, level}. Framing is
+// resynced by a quiet gap, exactly as the bed box does in the other
+// direction. lv_slider_set_value does NOT raise VALUE_CHANGED, so
+// nothing here echoes a command back down the wire.
+const uint8_t RPT_LEVEL = 20;
+uint8_t  upFrame[4];
+int      upLen = 0;
+unsigned long upLastByteMs = 0;
+long     upFramesSeen = 0;
+
+void pollBedBox() {
+  while (Serial1.available()) {
+    unsigned long now = millis();
+    if (upLen > 0 && now - upLastByteMs > 50) upLen = 0;
+    upLastByteMs = now;
+    upFrame[upLen++] = (uint8_t)Serial1.read();
+    if (upLen < 4) continue;
+    upLen = 0;
+    upFramesSeen++;
+
+    if (upFrame[1] != RPT_LEVEL) continue;
+    int z = upFrame[2], v = upFrame[3];
+    if (z < 0 || z > 3 || v > 100) continue;
+    if (!sliderZone[z]) continue;
+    lv_slider_set_value(sliderZone[z], v, LV_ANIM_OFF);
+    lv_label_set_text_fmt(lblZoneVal[z], "%d", v);
+  }
+}
+
+// Refreshes the three header labels. Cheap enough to run every second.
+void massHeaderTick(lv_timer_t *t) {
+  if (!lblMassTime) return;
+  long sec = nowSecOfDay();
+  if (sec >= 0)
+    lv_label_set_text_fmt(lblMassTime, "%02d:%02d",
+                          (int)(sec / 3600), (int)((sec / 60) % 60));
+  else
+    lv_label_set_text(lblMassTime, "--:--");
+
+  if (haveDS3231) {
+    int d, m, y; ds3231GetDate(d, m, y);
+    if (m >= 1 && m <= 12) lv_label_set_text_fmt(lblMassDate, "%d.%d.%02d", d, m, y);
+    else                   lv_label_set_text(lblMassDate, "");
+  }
+
+  if (tempOK) lv_label_set_text_fmt(lblMassTemp, "%d", (int)lroundf(gTemp));
+  else        lv_label_set_text(lblMassTemp, "--");
+}
+
 void buildMassage() {
   scrMassage = lv_obj_create(NULL);
-  lv_obj_set_style_bg_color(scrMassage, lv_color_hex(0x101418), 0);
+  lv_obj_set_style_bg_color(scrMassage, lv_color_hex(0x0D0F16), 0);
+  lv_obj_clear_flag(scrMassage, LV_OBJ_FLAG_SCROLLABLE);
 
-  // Back
+  // ---------------- header ----------------
   lv_obj_t *back = lv_btn_create(scrMassage);
-  lv_obj_set_size(back, 90, 50);
-  lv_obj_align(back, LV_ALIGN_TOP_LEFT, 10, 10);
+  lv_obj_set_size(back, 80, 44);
+  lv_obj_align(back, LV_ALIGN_TOP_LEFT, 8, 8);
+  lv_obj_set_style_bg_color(back, lv_color_hex(0x1A1E2A), 0);
   lv_obj_add_event_cb(back, evGoHome, LV_EVENT_CLICKED, NULL);
   lv_obj_t *bl = lv_label_create(back);
   lv_label_set_text(bl, "<");
   lv_obj_set_style_text_font(bl, &lv_font_montserrat_28, 0);
   lv_obj_center(bl);
 
-  lv_obj_t *title = lv_label_create(scrMassage);
-  lv_label_set_text(title, "MASSAGE");
-  lv_obj_set_style_text_font(title, &lv_font_montserrat_28, 0);
-  lv_obj_set_style_text_color(title, lv_color_white(), 0);
-  lv_obj_align(title, LV_ALIGN_TOP_MID, -60, 20);
+  // Time, then the date, then the temperature with a small c.
+  lblMassTime = lv_label_create(scrMassage);
+  lv_label_set_text(lblMassTime, "--:--");
+  lv_obj_set_style_text_font(lblMassTime, &lv_font_montserrat_40, 0);
+  lv_obj_set_style_text_color(lblMassTime, lv_color_hex(0xE8EAF0), 0);
+  lv_obj_align(lblMassTime, LV_ALIGN_TOP_RIGHT, -280, 8);
 
-  // Bed selector: big colored name buttons (Shemi/Ira/Both)
-  buildBedSelector();
+  lblMassDate = lv_label_create(scrMassage);
+  lv_label_set_text(lblMassDate, "");
+  lv_obj_set_style_text_font(lblMassDate, &lv_font_montserrat_28, 0);
+  lv_obj_set_style_text_color(lblMassDate, lv_color_hex(0x8992A6), 0);
+  lv_obj_align(lblMassDate, LV_ALIGN_TOP_RIGHT, -150, 16);
 
-  // Zone sliders
+  lblMassTemp = lv_label_create(scrMassage);
+  lv_label_set_text(lblMassTemp, "--");
+  lv_obj_set_style_text_font(lblMassTemp, &lv_font_montserrat_28, 0);
+  lv_obj_set_style_text_color(lblMassTemp, lv_color_hex(0xE8EAF0), 0);
+  lv_obj_align(lblMassTemp, LV_ALIGN_TOP_RIGHT, -46, 16);
+
+  lv_obj_t *cSmall = lv_label_create(scrMassage);
+  lv_label_set_text(cSmall, "c");
+  lv_obj_set_style_text_font(cSmall, &lv_font_montserrat_20, 0);
+  lv_obj_set_style_text_color(cSmall, lv_color_hex(0x8992A6), 0);
+  lv_obj_align(cSmall, LV_ALIGN_TOP_RIGHT, -24, 26);
+
+  lv_obj_t *rule = lv_obj_create(scrMassage);
+  lv_obj_set_size(rule, 780, 1);
+  lv_obj_align(rule, LV_ALIGN_TOP_MID, 0, 60);
+  lv_obj_set_style_bg_color(rule, lv_color_hex(0x232735), 0);
+  lv_obj_set_style_border_width(rule, 0, 0);
+
+  // ---------------- twelve mode tiles, left side ----------------
+  const char *PN[12] = {
+    P_MAPAL,     P_ALIYA,   P_NADNEDA, P_MALE,
+    P_ALACHSON,  P_TZAD,    P_SICHRUR, P_LISHA,
+    P_DOFEK,     P_NESHIMA, P_GESHEM,  P_AKRAI
+  };
+  const int TW = 139, TH = 106, TX = 16, TY = 74, TGX = 8, TGY = 8;
+  for (int i = 0; i < 12; i++) {
+    int col = i % 4, row = i / 4;
+    lv_obj_t *b = lv_btn_create(scrMassage);
+    lv_obj_set_size(b, TW, TH);
+    lv_obj_align(b, LV_ALIGN_TOP_LEFT, TX + col * (TW + TGX), TY + row * (TH + TGY));
+    lv_obj_set_style_radius(b, 10, 0);
+    lv_obj_set_style_shadow_width(b, 0, 0);
+    lv_obj_add_event_cb(b, evPreset, LV_EVENT_CLICKED, (void *)(intptr_t)i);
+    lv_obj_t *l = lv_label_create(b);
+    lv_label_set_text(l, PN[i]);
+    lv_obj_set_style_text_font(l, &font_hebrew_28, 0);
+    lv_obj_center(l);
+    patTile[i] = b;
+  }
+  refreshPatTiles();
+
+  // ---------------- four upright zone sliders, right side ----------------
+  const int SW = 30, SH = 250, SX = 618, SY = 86, SGX = 42;
   for (int z = 0; z < 4; z++) {
-    int y = 90 + z * 62;
-    lv_obj_t *nm = lv_label_create(scrMassage);
-    lv_label_set_text(nm, ZONE_NAME[z]);
-    lv_obj_set_style_text_font(nm, &lv_font_montserrat_20, 0);
-    lv_obj_set_style_text_color(nm, lv_color_hex(0x60D0FF), 0);
-    lv_obj_align(nm, LV_ALIGN_TOP_LEFT, 20, y + 8);
+    int x = SX + z * SGX;
+
+    lblZoneVal[z] = lv_label_create(scrMassage);
+    lv_label_set_text(lblZoneVal[z], "0");
+    lv_obj_set_style_text_font(lblZoneVal[z], &lv_font_montserrat_20, 0);
+    lv_obj_set_style_text_color(lblZoneVal[z], lv_color_hex(0x8992A6), 0);
+    lv_obj_align(lblZoneVal[z], LV_ALIGN_TOP_LEFT, x, SY - 24);
 
     sliderZone[z] = lv_slider_create(scrMassage);
-    lv_obj_set_size(sliderZone[z], 440, 22);
-    lv_obj_align(sliderZone[z], LV_ALIGN_TOP_LEFT, 170, y + 10);
+    lv_obj_set_size(sliderZone[z], SW, SH);          // taller than wide = upright
+    lv_obj_align(sliderZone[z], LV_ALIGN_TOP_LEFT, x, SY);
     lv_slider_set_range(sliderZone[z], 0, 100);
+    lv_obj_set_style_bg_color(sliderZone[z], lv_color_hex(0x1A1E2A), LV_PART_MAIN);
+    lv_obj_set_style_bg_color(sliderZone[z], lv_color_hex(0x12B886), LV_PART_INDICATOR);
+    lv_obj_set_style_bg_color(sliderZone[z], lv_color_hex(0x2BD4A0), LV_PART_KNOB);
     lv_obj_add_event_cb(sliderZone[z], evZoneSlider, LV_EVENT_VALUE_CHANGED, (void *)(intptr_t)z);
     lv_obj_add_event_cb(sliderZone[z], evZoneSlider, LV_EVENT_RELEASED, (void *)(intptr_t)z);
 
-    lblZoneVal[z] = lv_label_create(scrMassage);
-    lv_label_set_text(lblZoneVal[z], "0%");
-    lv_obj_set_style_text_font(lblZoneVal[z], &lv_font_montserrat_20, 0);
-    lv_obj_set_style_text_color(lblZoneVal[z], lv_color_white(), 0);
-    lv_obj_align(lblZoneVal[z], LV_ALIGN_TOP_LEFT, 640, y + 8);
+    // TEST 077: a Hebrew word will not fit legibly in a 30 px column.
+    // The columns are numbered instead: 1 head, 2 upper back,
+    // 3 lower back, 4 legs - the same order as the bed itself.
+    lv_obj_t *nm = lv_label_create(scrMassage);
+    lv_label_set_text_fmt(nm, "%d", z + 1);
+    lv_obj_set_style_text_font(nm, &lv_font_montserrat_28, 0);
+    lv_obj_set_style_text_color(nm, lv_color_hex(0xC8CDDB), 0);
+    lv_obj_align(nm, LV_ALIGN_TOP_LEFT, x + 8, SY + SH + 6);
   }
 
-  // Presets (Wave, Pulse, Ripple, Random)
-  const char *pn[4] = { "Wave", "Pulse", "Ripple", "Random" };
-  for (int i = 0; i < 4; i++) {
-    lv_obj_t *b = lv_btn_create(scrMassage);
-    lv_obj_set_size(b, 115, 55);
-    lv_obj_align(b, LV_ALIGN_BOTTOM_LEFT, 20 + i * 130, -75);
-    if (i == 3) lv_obj_set_style_bg_color(b, lv_color_hex(0x9040D0), 0); // Random = purple
-    lv_obj_add_event_cb(b, evPreset, LV_EVENT_CLICKED, (void *)(intptr_t)i);
-    lv_obj_t *l = lv_label_create(b);
-    lv_label_set_text(l, pn[i]);
-    lv_obj_set_style_text_font(l, &lv_font_montserrat_20, 0);
-    lv_obj_center(l);
-  }
-
-  // Timer buttons
+  // ---------------- bottom row: 15 / 30 / 60 / off ----------------
   const int tm[3] = { 15, 30, 60 };
   for (int i = 0; i < 3; i++) {
     lv_obj_t *b = lv_btn_create(scrMassage);
-    lv_obj_set_size(b, 100, 55);
-    lv_obj_align(b, LV_ALIGN_BOTTOM_LEFT, 20 + i * 115, -10);
-    lv_obj_set_style_bg_color(b, lv_color_hex(0x308050), 0);
+    lv_obj_set_size(b, 150, 52);
+    lv_obj_align(b, LV_ALIGN_BOTTOM_LEFT, 16 + i * 162, -10);
+    lv_obj_set_style_radius(b, 10, 0);
+    lv_obj_set_style_shadow_width(b, 0, 0);
+    lv_obj_set_style_bg_color(b, lv_color_hex(0x1F5A8A), 0);
     lv_obj_add_event_cb(b, evTimer, LV_EVENT_CLICKED, (void *)(intptr_t)tm[i]);
     lv_obj_t *l = lv_label_create(b);
-    lv_label_set_text_fmt(l, "%d min", tm[i]);
-    lv_obj_set_style_text_font(l, &lv_font_montserrat_20, 0);
+    lv_label_set_text_fmt(l, "%d", tm[i]);
+    lv_obj_set_style_text_font(l, &lv_font_montserrat_28, 0);
+    lv_obj_set_style_text_color(l, lv_color_hex(0xB5D4F4), 0);
     lv_obj_center(l);
   }
 
-  // OFF
   lv_obj_t *off = lv_btn_create(scrMassage);
-  lv_obj_set_size(off, 200, 120);
-  lv_obj_align(off, LV_ALIGN_BOTTOM_RIGHT, -20, -10);
-  lv_obj_set_style_bg_color(off, lv_color_hex(0xD03030), 0);
+  lv_obj_set_size(off, 280, 52);
+  lv_obj_align(off, LV_ALIGN_BOTTOM_RIGHT, -16, -10);
+  lv_obj_set_style_radius(off, 10, 0);
+  lv_obj_set_style_shadow_width(off, 0, 0);
+  lv_obj_set_style_bg_color(off, lv_color_hex(0x8F1F1F), 0);
   lv_obj_add_event_cb(off, evOff, LV_EVENT_CLICKED, NULL);
   lv_obj_t *ol = lv_label_create(off);
-  lv_label_set_text(ol, "OFF");
-  lv_obj_set_style_text_font(ol, &lv_font_montserrat_40, 0);
+  lv_label_set_text(ol, M_OFF);
+  lv_obj_set_style_text_font(ol, &font_hebrew_28, 0);
+  lv_obj_set_style_text_color(ol, lv_color_hex(0xF7C1C1), 0);
   lv_obj_center(ol);
+
+  lv_timer_create(massHeaderTick, 1000, NULL);
+  massHeaderTick(NULL);
 }
 
 
@@ -2281,12 +2507,41 @@ static void evMinUp (lv_event_t *e) { setMinute++; if (setMinute > 59) setMinute
 static void evMinDn (lv_event_t *e) { setMinute--; if (setMinute < 0)  setMinute = 59; refreshSetterLabels(); }
 static void evAmPm  (lv_event_t *e) { setPM = !setPM;                                  refreshSetterLabels(); }
 
+// ---- TEST 076: date setter, same shape as the time setter ----
+int setDay = 1, setMon = 1, setYear = 26;     // year is 2000 + this
+lv_obj_t *lblSetD = NULL, *lblSetMo = NULL, *lblSetY = NULL;
+
+int daysInMonth(int m, int y) {
+  const int d[12] = {31,28,31,30,31,30,31,31,30,31,30,31};
+  if (m < 1 || m > 12) return 31;
+  if (m == 2 && ((y % 4) == 0)) return 29;    // 2000-2099, so this is enough
+  return d[m-1];
+}
+void refreshDateLabels() {
+  if (!lblSetD) return;
+  int mx = daysInMonth(setMon, setYear);
+  if (setDay > mx) setDay = mx;
+  lv_label_set_text_fmt(lblSetD,  "%d", setDay);
+  lv_label_set_text_fmt(lblSetMo, "%d", setMon);
+  lv_label_set_text_fmt(lblSetY,  "%02d", setYear);
+}
+static void evDayUp (lv_event_t *e) { setDay++;  if (setDay  > daysInMonth(setMon,setYear)) setDay = 1;  refreshDateLabels(); }
+static void evDayDn (lv_event_t *e) { setDay--;  if (setDay  < 1)  setDay  = daysInMonth(setMon,setYear); refreshDateLabels(); }
+static void evMonUp (lv_event_t *e) { setMon++;  if (setMon  > 12) setMon  = 1;  refreshDateLabels(); }
+static void evMonDn (lv_event_t *e) { setMon--;  if (setMon  < 1)  setMon  = 12; refreshDateLabels(); }
+static void evYearUp(lv_event_t *e) { setYear++; if (setYear > 99) setYear = 0;  refreshDateLabels(); }
+static void evYearDn(lv_event_t *e) { setYear--; if (setYear < 0)  setYear = 99; refreshDateLabels(); }
+
 static void evSetTime(lv_event_t *e) {
   int h24 = setHour12 % 12;              // 12 AM -> 0, 12 PM -> 12
   if (setPM) h24 += 12;
   baseSecOfDay = (long)h24*3600 + (long)setMinute*60;
   baseMillis = millis(); timeSet = true;
-  if (haveDS3231) ds3231SetHM(h24, setMinute);
+  if (haveDS3231) {
+    ds3231SetHM(h24, setMinute);
+    ds3231SetDate(setDay, setMon, setYear);        // TEST 076
+    Serial.printf("DS3231 date set to %d.%d.%02d\n", setDay, setMon, setYear);
+  }
   Serial.printf("time set %d:%02d %s  (%02d:%02d 24h)\n",
                 setHour12, setMinute, setPM ? "PM" : "AM", h24, setMinute);
 }
@@ -2730,8 +2985,8 @@ void buildSettings() {
 
   // centered row: [hour] : [min]
   lv_obj_t *row = lv_obj_create(tClock);
-  lv_obj_set_size(row, 560, 220);
-  lv_obj_align(row, LV_ALIGN_TOP_MID, 0, 6);
+  lv_obj_set_size(row, 560, 92);          // TEST 078: was 220, which swallowed the date row
+  lv_obj_align(row, LV_ALIGN_TOP_MID, 0, 10);
   lv_obj_set_style_bg_opa(row, LV_OPA_TRANSP, 0);
   lv_obj_set_style_border_width(row, 0, 0);
   lv_obj_clear_flag(row, LV_OBJ_FLAG_SCROLLABLE);
@@ -2790,11 +3045,56 @@ void buildSettings() {
   }
   refreshSetterLabels();
 
-  lv_obj_t *setb = lv_btn_create(tClock); lv_obj_set_size(setb,220,64);
+  // ---- TEST 076: second row, day / month / year ----
+  lv_obj_t *drow = lv_obj_create(tClock);
+  lv_obj_remove_style_all(drow);
+  lv_obj_set_size(drow, 700, 80);
+  lv_obj_align(drow, LV_ALIGN_TOP_MID, 0, 126);   // TEST 078: 34 px of air below the time
+  lv_obj_set_flex_flow(drow, LV_FLEX_FLOW_ROW);
+  lv_obj_set_flex_align(drow, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+  lv_obj_set_style_pad_column(drow, 8, 0);
+  lv_obj_clear_flag(drow, LV_OBJ_FLAG_SCROLLABLE);
+
+  struct { const char *cap; lv_event_cb_t dn; lv_event_cb_t up; lv_obj_t **lbl; }
+  dparts[3] = {
+    { "day",   evDayDn,  evDayUp,  &lblSetD  },
+    { "month", evMonDn,  evMonUp,  &lblSetMo },
+    { "year",  evYearDn, evYearUp, &lblSetY  }
+  };
+  for (int i = 0; i < 3; i++) {
+    lv_obj_t *bd = lv_btn_create(drow); lv_obj_set_size(bd, 56, 60);
+    lv_obj_add_event_cb(bd, dparts[i].dn, LV_EVENT_CLICKED, NULL);
+    lv_obj_t *ld = lv_label_create(bd); lv_label_set_text(ld, "-");
+    lv_obj_set_style_text_font(ld, &lv_font_montserrat_28, 0); lv_obj_center(ld);
+
+    *dparts[i].lbl = lv_label_create(drow);
+    lv_label_set_text(*dparts[i].lbl, "1");
+    lv_obj_set_style_text_font(*dparts[i].lbl, &lv_font_montserrat_40, 0);
+    lv_obj_set_style_text_color(*dparts[i].lbl, lv_color_hex(SET_TEXT_COL), 0);
+
+    lv_obj_t *bu = lv_btn_create(drow); lv_obj_set_size(bu, 56, 60);
+    lv_obj_add_event_cb(bu, dparts[i].up, LV_EVENT_CLICKED, NULL);
+    lv_obj_t *lu = lv_label_create(bu); lv_label_set_text(lu, "+");
+    lv_obj_set_style_text_font(lu, &lv_font_montserrat_28, 0); lv_obj_center(lu);
+
+    lv_obj_t *cap = lv_label_create(drow);
+    lv_label_set_text(cap, dparts[i].cap);
+    lv_obj_set_style_text_font(cap, &lv_font_montserrat_20, 0);
+    lv_obj_set_style_text_color(cap, lv_color_hex(SET_TEXT_COL), 0);
+  }
+
+  // seed the date from the chip, so a correct clock is not overwritten by 1.1.00
+  if (haveDS3231) {
+    int d, m, y; ds3231GetDate(d, m, y);
+    if (d >= 1 && d <= 31 && m >= 1 && m <= 12) { setDay = d; setMon = m; setYear = y; }
+  }
+  refreshDateLabels();
+
+  lv_obj_t *setb = lv_btn_create(tClock); lv_obj_set_size(setb,300,64);
   lv_obj_align(setb,LV_ALIGN_BOTTOM_MID,0,-14);
   lv_obj_set_style_bg_color(setb,lv_color_hex(0x209040),0);
   lv_obj_add_event_cb(setb,evSetTime,LV_EVENT_CLICKED,NULL);
-  lv_obj_t *sbl=lv_label_create(setb); lv_label_set_text(sbl,"Set Time");
+  lv_obj_t *sbl=lv_label_create(setb); lv_label_set_text(sbl,"Set time and date");
   lv_obj_set_style_text_font(sbl,&lv_font_montserrat_28,0); lv_obj_center(sbl);
 
   // ---- Display ----
@@ -3517,6 +3817,15 @@ void pollSerialCommands(){
           if (state == ST_SAVER) drawDiverClock(true);
         } else Serial.println("usage: time HH:MM");
       }
+      else if (conBuf.startsWith("date ")){
+        int dd, mo, yy;
+        if (sscanf(conBuf.c_str()+5, "%d %d %d", &dd, &mo, &yy)==3 &&
+            dd>=1 && dd<=31 && mo>=1 && mo<=12 && yy>=0 && yy<=99){
+          if (haveDS3231){ ds3231SetDate(dd, mo, yy);
+            Serial.printf("DS3231 date set to %d.%d.%02d\n", dd, mo, yy); }
+          else Serial.println("no DS3231 - nowhere to keep a date");
+        } else Serial.println("usage: date DD MM YY");
+      }
       else if (conBuf == "dump") uttDump();
       else if (conBuf.startsWith("th ")) {
         float v = atof(conBuf.c_str() + 3);
@@ -3714,6 +4023,7 @@ void setup() {
 
 void loop() {
   pollSerialCommands();
+  pollBedBox();              // TEST 077: levels coming back from the bed
 
   // TEST 061: the microphone runs in EVERY state. It used to live inside
   // the ST_UI branch, so it stopped the moment the screensaver came on.
@@ -3840,5 +4150,10 @@ void loop() {
  *    time HH:MM  sets the clock AND writes it to the DS3231, so it
  *              now survives a power cut
  * ============================================================
- *                  TEST  074   (end of file)
+ *                  TEST  078   (end of file)
+ *  Massage screen rebuilt: 12 mode tiles, upright zone sliders,
+ *  time, date and temperature top right, no bed selector.
+ *  Settings now sets the DATE as well as the time.
+ *  The sliders follow the running pattern, fed up the wire.
+ *  Clock tab: the date row no longer sits on top of the time.
  * ============================================================ */
