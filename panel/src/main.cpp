@@ -1,6 +1,67 @@
 /* ============================================================
- *                        TEST  078
+ *                        TEST  081
  * ============================================================
+ *  TEST 081 - WHOSE PANEL IS THIS
+ *
+ *    At power-on each panel shows its owner's photograph for a
+ *    few seconds. Shemi's panel shows Shemi, Ira's shows Ira.
+ *
+ *    PANEL_ID picks the picture, and that one line is the ONLY
+ *    difference between the two builds. Everything after the
+ *    photo - home screen, tile order, clock - is deliberately
+ *    identical on both, because the two of you swap sides and an
+ *    interface that changes with the side of the bed would be
+ *    confusing at exactly the wrong hour.
+ *
+ *    The photos are COMPILED IN, not read from the SD card. The
+ *    card is not fitted, its pins used to belong to the removed
+ *    microphone, and a boot screen that depends on a card is a
+ *    boot screen that one day will not appear. Cost: about 150 KB
+ *    of a 16 MB flash.
+ *
+ *    Practical benefit beyond the pleasure of it: after a flash
+ *    you know within a second which board you just wrote to.
+ *
+ *  TEST 080 - DARK ENOUGH TO SLEEP NEXT TO, AND A LUX READOUT
+ *
+ *    The About tab now shows LIVE light level and the backlight
+ *    duty the firmware has chosen from it. Both update twice a
+ *    second. This exists because the calibration numbers cannot
+ *    be guessed from a desk - they have to be read in the actual
+ *    room, at the actual hour, and until now lux only ever went
+ *    to the serial port, which means a laptop by the bed.
+ *
+ *    To calibrate: open Settings -> About and write down the lux
+ *    with the room lit, with only the night lamp, and in full
+ *    dark. Then, in full dark, lower the backlight slider until
+ *    the clock is only just readable without glasses and note
+ *    the percent. Those four numbers set the whole curve.
+ *    First real night in the bed produced one verdict: the panel
+ *    is a lamp. Three separate causes, three separate fixes.
+ *
+ *    1. THE BACKLIGHT FLOOR. It was adjustable all along - GPIO2,
+ *       LEDC channel 7 - but the Settings slider bottomed out at
+ *       30 percent and the stored default was 85. Even "darkest"
+ *       was a third of full power. The slider now goes down to 2.
+ *
+ *    2. THE SCREENSAVER HAD NO FLOOR OF ITS OWN. It used the same
+ *       number as the daytime UI. There is now a SECOND slider,
+ *       "Night backlight", default 4 percent, used only while the
+ *       screensaver is up, with its own low ceiling so that even a
+ *       lit room cannot drive it back to full.
+ *
+ *    3. THE WHITE BED TILE. A 200x200 white image at full backlight
+ *       is a light source no matter what the backlight does. All
+ *       four home tiles are now recoloured toward black by
+ *       TILE_DIM_OPA. The artwork is untouched - this is LVGL
+ *       recolouring at draw time, so one number changes it all.
+ *
+ *    SAVER_DIM also drops 56 -> 38 for the dial and the hands.
+ *
+ *    And the temperature is BIGGER: temp_font.h is regenerated at
+ *    104 px digits, up from 80. REPLACE include/temp_font.h with
+ *    the new file alongside this one, or the build will not match.
+ *
  *  TEST 078 - CLOCK TAB SPACING
  *    The time row was 220 px tall to hold 64 px buttons, so the
  *    date row landed inside it. The time row is now only as tall
@@ -556,6 +617,7 @@
 #include <SD.h>
 #include <driver/i2s.h>        // TEST 054: INMP441 microphone
 #include <JPEGDEC.h>
+#include "boot_photo.h"        // TEST 081: both boot photographs
 #include <Arduino_GFX_Library.h>
 #include "temp_font.h"          // TEST 050: TempBig / TempSmall, put it in include/
 #include "dial_image.h"         // TEST 053: the dial, embedded in flash
@@ -577,7 +639,7 @@
 #include <lvgl.h>
 #include <Preferences.h>
 
-#define TEST_NUMBER 78
+#define TEST_NUMBER 81
 
 // ---- backlight ----
 #define GFX_BL 2
@@ -585,8 +647,16 @@
 #define BL_FREQ 5000
 #define BL_RES 8
 const float LUX_FLOOR = 2.0f, LUX_CEIL = 400.0f;
-int brightFloor = 85;         // settings-adjustable
+int brightFloor = 40;         // settings-adjustable, daytime UI floor
+// TEST 080: the screensaver gets its OWN floor and its own ceiling. At
+// night this is the only number that matters, and 4 percent on this panel
+// is a faint glow you can read without glasses and sleep beside.
+int saverFloor  = 4;          // settings-adjustable
+#define SAVER_CEIL 45         // even a bright room will not exceed this
 float targetDuty = 255, curDuty = 255;
+// TEST 080: declared up here, not with the other Settings widgets, because
+// refreshAbout() is defined long before that block.
+lv_obj_t *lblAbout = NULL;
 
 // ---- SD ----
 // ---- TEST 054: INMP441 microphone (I2S0) ----
@@ -643,7 +713,7 @@ float targetDuty = 255, curDuty = 255;
 #define DIAL_FILE "/diver_dial.jpg"
 // TEST 066: how bright the screensaver draws, in percent. Applied to
 // the dial once at decode time, and baked into the hand colours below.
-#define SAVER_DIM 56
+#define SAVER_DIM 38        // TEST 080: was 56
 // TEST 048: where the clock face sits on the screensaver. Must match the
 // dial image on the card - the artwork in dial_left_*.jpg is centred on 240.
 #define CLOCK_CX 240
@@ -726,6 +796,16 @@ int       dialBlocks = 0;        // TEST 049: blocks the decoder actually wrote
 uint16_t *clockBuf  = NULL;      // TEST 055: off-screen compose buffer
 char      dialStatus[64] = "dial: not checked";
 #define WELCOME_MS 2000
+
+// ============================================================
+//  TEST 081: PANEL IDENTITY - the one line that differs
+// ============================================================
+//   1 = Shemi's panel (the ESP32-8048S043 by the left head)
+//   2 = Ira's panel   (the Waveshare ESP32-S3-Touch-LCD-4.3)
+// Set it, flash it, and the photograph confirms you were right.
+#define PANEL_ID 1
+
+#define BOOT_PHOTO_MS 3500     // how long the face stays up
 uint32_t saverTimeoutMs = 300000UL;   // settings-adjustable
 #define PHOTO_MS 2000
 
@@ -830,6 +910,7 @@ const char *ZONE_NAME[4] = {"Head", "Shoulders", "Back", "Legs"};
 
 // ---- forward declarations ----
 int  jpegDrawCb(JPEGDRAW *p);
+bool showBootPhoto();              // TEST 081
 bool showPhoto(const char *path);
 void scanPhotos();
 void showRandomPhoto();
@@ -844,6 +925,7 @@ bool sht31Begin();                          // TEST 062
 bool sht31Read(float &t, float &h);         // TEST 062
 void setupBacklight();
 void computeTargetFromLux();
+void refreshAbout();               // TEST 080
 void easeBacklight();
 void sendMsg(uint8_t bed, uint8_t cmd, uint8_t target, uint8_t value);
 void learnReference();
@@ -924,6 +1006,10 @@ void exitSaver();
 #define TILE_SZ    200
 #define TILE_GAPX   22
 #define TILE_GAPY   16
+// TEST 080: how far the home tiles are pulled toward black, 0..255.
+// 0 is the original artwork, 255 is a black square. 110 takes the glare
+// off the white bed without making the icons hard to recognise.
+#define TILE_DIM_OPA 110
 #define TILE_X0     78
 #define TILE_Y0     64
 
@@ -1004,12 +1090,55 @@ void setupBacklight() {
   curDuty = 255; targetDuty = 255;
   ledcWrite(BL_CH, 255);
 }
+// TEST 080: the About tab, rebuilt on demand so the light reading is live.
+// Kept as its own function because it is called from two places: once when
+// the tab is built, and twice a second from the main loop.
+void refreshAbout() {
+  if (!lblAbout || !lv_obj_is_valid(lblAbout)) return;
+  char info[320];
+  int pct = (int)(curDuty * 100.0f / 255.0f + 0.5f);
+  char luxTxt[32];
+  if (haveBH1750 && luxOK) snprintf(luxTxt,sizeof(luxTxt),"%.1f lux", gLux);
+  else                     snprintf(luxTxt,sizeof(luxTxt),"-- no reading --");
+  snprintf(info,sizeof(info),
+    "BG BEDROOM\nTEST %03d\n\n"
+    "Light    : %s\n"
+    "Temp/Hum : %s\n"
+    "Pressure : %s\n"
+    "RTC      : %s\n"
+    "Touch    : GT911\n\n"
+    "now: %.1f C   %.0f %%   %.0f hPa\n\n"
+    "LIGHT NOW : %s\n"
+    "BACKLIGHT : %d %%   (floor %d, night %d)",
+    TEST_NUMBER,
+    haveBH1750 ? "BH1750 ok" : "absent",
+    haveSHT31  ? "SHT31 ok"  : "absent",
+    haveBME280 ? (isBME ? "BME280 ok" : "BMP280 ok") : "absent",
+    haveDS3231 ? "DS3231 ok" : "none (manual)",
+    gTemp, gHum, gPress,
+    luxTxt, pct, brightFloor, saverFloor);
+  lv_label_set_text(lblAbout,info);
+}
+
 void computeTargetFromLux() {
-  if (!haveBH1750 || !luxOK) { targetDuty = 255; return; }
+  // TEST 080: which floor and ceiling apply depends on the state. The
+  // screensaver is the one that sits next to a sleeping head, so it gets
+  // its own pair of numbers and never borrows the daytime ones.
+  bool night   = (state == ST_SAVER);
+  int  floorPct = night ? saverFloor : brightFloor;
+  int  ceilPct  = night ? SAVER_CEIL : 100;
+  if (floorPct > ceilPct) floorPct = ceilPct;
+
+  if (!haveBH1750 || !luxOK) {
+    // No light sensor reading. Fall back to the FLOOR, not to full
+    // brightness - a failed sensor must never light the room at 3 am.
+    targetDuty = floorPct * 255.0f / 100.0f;
+    return;
+  }
   float l = constrain(gLux, LUX_FLOOR, LUX_CEIL);
   float f = (logf(l + 1) - logf(LUX_FLOOR + 1)) /
             (logf(LUX_CEIL + 1) - logf(LUX_FLOOR + 1));
-  int pct = brightFloor + (int)((100 - brightFloor) * f);
+  int pct = floorPct + (int)((ceilPct - floorPct) * f);
   targetDuty = pct * 255.0f / 100.0f;
 }
 void easeBacklight() {
@@ -1021,6 +1150,41 @@ void easeBacklight() {
 // ============================================================
 //  JPEG / photos
 // ============================================================
+
+// TEST 081: the boot photograph, straight from flash to the panel.
+// Same route the screensaver dial already uses: JPEGDEC needs a
+// writable pointer, so the bytes are copied out of flash to heap
+// first, decoded straight to the screen, and the heap given back.
+// Nothing stays resident - this runs once and is never touched again.
+bool showBootPhoto() {
+#if PANEL_ID == 2
+  const uint8_t *src = BOOT_IRA_JPG;   const uint32_t len = BOOT_IRA_JPG_LEN;
+  const char    *who = "Ira";
+#else
+  const uint8_t *src = BOOT_SHEMI_JPG; const uint32_t len = BOOT_SHEMI_JPG_LEN;
+  const char    *who = "Shemi";
+#endif
+
+  uint8_t *buf = (uint8_t *)malloc(len);
+  if (!buf) {
+    Serial.printf("boot photo: no heap for %u bytes\n", (unsigned)len);
+    return false;
+  }
+  memcpy_P(buf, src, len);
+
+  bool ok = false;
+  if (jpeg.openRAM(buf, len, jpegDrawCb)) {
+    jpeg.setPixelType(RGB565_LITTLE_ENDIAN);
+    ok = jpeg.decode(0, 0, 0);
+    jpeg.close();
+  }
+  free(buf);
+
+  Serial.printf("boot photo: panel %d, %s, %s\n",
+                PANEL_ID, who, ok ? "shown" : "DECODE FAILED");
+  return ok;
+}
+
 int jpegDrawCb(JPEGDRAW *p) {
   gfx->draw16bitRGBBitmap(p->x, p->y, p->pPixels, p->iWidth, p->iHeight);
   return 1;
@@ -2067,6 +2231,12 @@ void buildHome() {
     lv_obj_t *im = lv_img_create(parent);
     lv_img_set_src(im, src);
     lv_obj_center(im);
+    // TEST 080: recolour toward black at draw time. The images in
+    // tile_img.h are not modified, so raising or lowering TILE_DIM_OPA
+    // is the only edit needed to retune this.
+    lv_obj_set_style_img_recolor(im, lv_color_black(), 0);
+    lv_obj_set_style_img_recolor_opa(im, TILE_DIM_OPA, 0);
+    lv_obj_center(im);
     return im;
   };
 
@@ -2485,7 +2655,8 @@ static void evSettingsTab(lv_event_t *e) {
 //  Settings screen
 // ============================================================
 lv_obj_t *lblFloorVal=NULL, *ddSaver=NULL, *sldSmall=NULL, *sldBig=NULL,
-         *lblSmall=NULL, *lblBig=NULL, *ddRandom=NULL;
+         *lblSmall=NULL, *lblBig=NULL, *ddRandom=NULL,
+         *lblNightVal=NULL;         // TEST 080
 
 // TEST 042: the LVGL rollers never worked (minute roller stayed empty, hour
 // scrolled one way only). Replaced with plain +/- buttons and 12-hour AM/PM.
@@ -2548,6 +2719,15 @@ static void evSetTime(lv_event_t *e) {
 static void evFloor(lv_event_t *e) {
   brightFloor = lv_slider_get_value(lv_event_get_target(e));
   lv_label_set_text_fmt(lblFloorVal, "%d%%", brightFloor);
+  saveSettings();
+}
+// TEST 080: the night floor. Applied immediately so the effect is visible
+// while the finger is still on the slider - the only sane way to pick a
+// brightness this low is to look at it.
+static void evNightFloor(lv_event_t *e) {
+  saverFloor = lv_slider_get_value(lv_event_get_target(e));
+  lv_label_set_text_fmt(lblNightVal, "%d%%", saverFloor);
+  computeTargetFromLux();
   saveSettings();
 }
 static void evSaver(lv_event_t *e) {
@@ -3101,15 +3281,25 @@ void buildSettings() {
   lv_obj_t *fl=lv_label_create(tDisp); lv_label_set_text(fl,"Min brightness (night)");
   lv_obj_set_style_text_font(fl,&lv_font_montserrat_20,0); lv_obj_align(fl,LV_ALIGN_TOP_LEFT,20,20);
   lv_obj_t *sf=lv_slider_create(tDisp); lv_obj_set_size(sf,480,20);
-  lv_slider_set_range(sf,30,100); lv_slider_set_value(sf,brightFloor,LV_ANIM_OFF);
+  lv_slider_set_range(sf,2,100); lv_slider_set_value(sf,brightFloor,LV_ANIM_OFF);   // TEST 080: was 30..100
   lv_obj_align(sf,LV_ALIGN_TOP_LEFT,20,60);
   lv_obj_add_event_cb(sf,evFloor,LV_EVENT_VALUE_CHANGED,NULL);
   lblFloorVal=lv_label_create(tDisp); lv_label_set_text_fmt(lblFloorVal,"%d%%",brightFloor);
   lv_obj_set_style_text_font(lblFloorVal,&lv_font_montserrat_20,0); lv_obj_align(lblFloorVal,LV_ALIGN_TOP_LEFT,520,55);
+  // TEST 080: the one that matters at night.
+  lv_obj_t *nl=lv_label_create(tDisp); lv_label_set_text(nl,"Night backlight (screensaver)");
+  lv_obj_set_style_text_font(nl,&lv_font_montserrat_20,0); lv_obj_align(nl,LV_ALIGN_TOP_LEFT,20,110);
+  lv_obj_t *sn=lv_slider_create(tDisp); lv_obj_set_size(sn,480,20);
+  lv_slider_set_range(sn,1,60); lv_slider_set_value(sn,saverFloor,LV_ANIM_OFF);
+  lv_obj_align(sn,LV_ALIGN_TOP_LEFT,20,150);
+  lv_obj_add_event_cb(sn,evNightFloor,LV_EVENT_VALUE_CHANGED,NULL);
+  lblNightVal=lv_label_create(tDisp); lv_label_set_text_fmt(lblNightVal,"%d%%",saverFloor);
+  lv_obj_set_style_text_font(lblNightVal,&lv_font_montserrat_20,0); lv_obj_align(lblNightVal,LV_ALIGN_TOP_LEFT,520,145);
+
   lv_obj_t *tl=lv_label_create(tDisp); lv_label_set_text(tl,"Screensaver after");
-  lv_obj_set_style_text_font(tl,&lv_font_montserrat_20,0); lv_obj_align(tl,LV_ALIGN_TOP_LEFT,20,130);
+  lv_obj_set_style_text_font(tl,&lv_font_montserrat_20,0); lv_obj_align(tl,LV_ALIGN_TOP_LEFT,20,220);
   ddSaver=lv_dropdown_create(tDisp); lv_dropdown_set_options(ddSaver,"30 sec\n1 min\n5 min\n10 min");
-  lv_obj_set_width(ddSaver,200); lv_obj_align(ddSaver,LV_ALIGN_TOP_LEFT,20,165);
+  lv_obj_set_width(ddSaver,200); lv_obj_align(ddSaver,LV_ALIGN_TOP_LEFT,20,255);
   { int sel=2; if(saverTimeoutMs==30000UL)sel=0; else if(saverTimeoutMs==60000UL)sel=1; else if(saverTimeoutMs==600000UL)sel=3; lv_dropdown_set_selected(ddSaver,sel);}
   lv_obj_add_event_cb(ddSaver,evSaver,LV_EVENT_VALUE_CHANGED,NULL);
 
@@ -3157,26 +3347,11 @@ void buildSettings() {
   lv_obj_center(sll);
 
   // ---- About ----
-  lv_obj_t *ab=lv_label_create(tAbout);
-  char info[256];
-  snprintf(info,sizeof(info),
-    "BG BEDROOM\nTEST %03d\n\n"
-    "Light    : %s\n"
-    "Temp/Hum : %s\n"
-    "Pressure : %s\n"
-    "RTC      : %s\n"
-    "Touch    : GT911\n\n"
-    "now: %.1f C   %.0f %%   %.0f hPa",
-    TEST_NUMBER,
-    haveBH1750 ? "BH1750 ok" : "absent",
-    haveSHT31  ? "SHT31 ok"  : "absent",
-    haveBME280 ? (isBME ? "BME280 ok" : "BMP280 ok") : "absent",
-    haveDS3231 ? "DS3231 ok" : "none (manual)",
-    gTemp, gHum, gPress);
-  lv_label_set_text(ab,info);
-  lv_obj_set_style_text_font(ab,&lv_font_montserrat_20,0);
-  lv_obj_set_style_text_color(ab,lv_color_hex(SET_TEXT_COL),0);
-  lv_obj_align(ab,LV_ALIGN_TOP_LEFT,30,20);
+  lblAbout=lv_label_create(tAbout);
+  lv_obj_set_style_text_font(lblAbout,&lv_font_montserrat_20,0);
+  lv_obj_set_style_text_color(lblAbout,lv_color_hex(SET_TEXT_COL),0);
+  lv_obj_align(lblAbout,LV_ALIGN_TOP_LEFT,30,20);
+  refreshAbout();
 
   // blank screen used behind full-screen photo previews
   scrBlank = lv_obj_create(NULL);
@@ -3619,7 +3794,8 @@ void buildRoom() {
 // ============================================================
 void loadSettings() {
   prefs.begin("panel", true);
-  brightFloor    = prefs.getInt("bfloor", 85);
+  brightFloor    = prefs.getInt("bfloor", 40);      // TEST 080: was 85
+  saverFloor     = prefs.getInt("nfloor", 4);       // TEST 080
   saverTimeoutMs = prefs.getUInt("saver", 300000UL);
   setMinSmall    = prefs.getInt("dsmall", 60);
   setMinBig      = prefs.getInt("dbig", 165);
@@ -3629,6 +3805,7 @@ void loadSettings() {
 void saveSettings() {
   prefs.begin("panel", false);
   prefs.putInt("bfloor", brightFloor);
+  prefs.putInt("nfloor", saverFloor);
   prefs.putUInt("saver", saverTimeoutMs);
   prefs.putInt("dsmall", setMinSmall);
   prefs.putInt("dbig", setMinBig);
@@ -3922,6 +4099,11 @@ void setup() {
   gfx->fillScreen(BLACK);
   setupBacklight();
 
+  // TEST 081: whose panel is this. Before anything else touches the
+  // screen, so it is the first thing you see and the first line on
+  // serial that tells you the flash went to the right board.
+  if (showBootPhoto()) delay(BOOT_PHOTO_MS);
+
   bool sd = false;
 #if ENABLE_SD
   SPI.begin(SD_CLK, SD_MISO, SD_MOSI, SD_CS);
@@ -4150,10 +4332,12 @@ void loop() {
  *    time HH:MM  sets the clock AND writes it to the DS3231, so it
  *              now survives a power cut
  * ============================================================
- *                  TEST  078   (end of file)
+ *                  TEST  081   (end of file)
  *  Massage screen rebuilt: 12 mode tiles, upright zone sliders,
  *  time, date and temperature top right, no bed selector.
  *  Settings now sets the DATE as well as the time.
  *  The sliders follow the running pattern, fed up the wire.
  *  Clock tab: the date row no longer sits on top of the time.
+ *  TEST 080: dark enough to sleep beside. Needs the new temp_font.h.
+ *  TEST 081: each panel boots with its owner's photograph.
  * ============================================================ */
