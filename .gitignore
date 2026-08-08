@@ -19,7 +19,7 @@ __pycache__/
 # ---- KiCad ----
 # Backup archives KiCad writes on every save
 *-backups/
-
+.history/
 # Per-user window and view state - changes constantly, means nothing to anyone else
 *.kicad_prl
 
