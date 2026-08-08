@@ -1,6 +1,54 @@
+# ============================================================
+#  Bg_Bed - .gitignore
+#  Covers the three PlatformIO projects and the KiCad board.
+# ============================================================
+
+# ---- PlatformIO ----
 .pio/
 .pioenvs/
 .piolibdeps/
+
+# ---- VS Code ----
 .vscode/
 !.vscode/extensions.json
+
+# ---- Python ----
 *.pyc
+__pycache__/
+
+# ---- KiCad ----
+# Backup archives KiCad writes on every save
+*-backups/
+
+# Per-user window and view state - changes constantly, means nothing to anyone else
+*.kicad_prl
+
+# Editor backups
+*.kicad_sch-bak
+*.kicad_pcb-bak
+*.bak
+*~
+
+# Rebuilt automatically from the installed libraries
+fp-info-cache
+
+# Autosave and lock files
+_autosave-*
+*.lck
+~*.lck
+
+# Generated output - regenerate it, never commit it
+gerbers/
+*.gbr
+*.drl
+*.gbrjob
+
+# Netlist EXPORTED by KiCad is generated. The hand-written
+# bedbox_carrier.net is NOT - it is the source, so keep it.
+!bedbox_carrier.net
+
+# ---- Windows and macOS clutter ----
+Thumbs.db
+desktop.ini
+.DS_Store
+
