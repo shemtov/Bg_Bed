@@ -1,8 +1,35 @@
 // ============================================================
-//                        TEST  027
+//                        TEST  028
 // ============================================================
 //  IRA PANEL - Waveshare ESP32-S3-Touch-LCD-4.3
 //  ESP32-S3-WROOM-1 N16R8, 800x480 RGB, GT911 touch, CH422G expander
+//
+//  WHAT CHANGED IN TEST 028  -  THE SAME SCREEN AS SHEMI'S
+//
+//    The home screen is now a copy of panel_shemi's, down to the
+//    pixel: a 4 x 2 grid of 175 px tiles, 20 px apart across and 16
+//    down, starting 20 from the left and 74 from the top.
+//
+//      row 0:  massage   radio   air conditioning   fan
+//      row 1:  light     shades  settings           -
+//
+//    Same artwork, same order, same colours, same eighth slot left
+//    empty. You two swap sides of the bed, and a panel that looks
+//    different depending on which side you woke up on is worse than
+//    no panel at all.
+//
+//    GONE: the "info" button and the brightness slider. Brightness is
+//    parked - the honest answer there is a wire to the MP3302's EN
+//    pin, and until that is done a slider that cannot really dim is
+//    just something to be disappointed by.
+//
+//    Every tile opens the "not yet" screen. None of them do anything
+//    else yet, and that is deliberate: the layout is settled now, so
+//    the screens behind it can be filled in one at a time without the
+//    front page ever moving again.
+//
+//    NEEDS ONE LINE IN platformio.ini:  -DLV_FONT_MONTSERRAT_40=1
+//    (the settings tile draws its gear at 40 px, same as Shemi's)
 //
 //  WHAT CHANGED IN TEST 027  -  THE FAN HAS ITS PICTURE
 //
@@ -607,7 +634,7 @@
 //  PIN MAP - taken from Waveshare's own published mapping, not guessed
 // ============================================================
 
-#define TEST_NUMBER 27
+#define TEST_NUMBER 28
 
 #include <Arduino.h>
 #include <Wire.h>
@@ -1086,10 +1113,14 @@ void setDim(int pct) {
 //  an interface that depends on which side of the bed you woke up on
 //  would be worse than none.
 // ============================================================
-#define TILE_PX      180
-#define TILE_GAP     22
-#define TILE_COLS    3
-#define TILE_ROWS    2
+// TEST 028: identical to panel_shemi. Do not "improve" one without
+// the other - the whole point is that they are the same screen.
+#define TILE_SZ      175
+#define TILE_GAPX     20
+#define TILE_GAPY     16
+#define TILE_X0       20
+#define TILE_Y0       74
+#define TILE_ZOOM    224      // artwork is 200 px; 256 = full size
 #define TILE_DIM_OPA 110      // how far the artwork is pulled toward black
 
 lv_obj_t *scrHome = NULL, *scrTest = NULL;
@@ -1146,37 +1177,37 @@ static void evTile(lv_event_t *e) {
   }
 }
 
+// TEST 028: kept, unused, and marked as such. If a way back to the
+// diagnostics page is ever wanted again - a long press somewhere, a
+// serial command - the handler is already here.
 static void evGoTest(lv_event_t *e) { if (scrTest) lv_scr_load(scrTest); }
-static void evGoHome(lv_event_t *e) { if (scrHome) lv_scr_load(scrHome); }
 
-// Where a tile sits in the 3 x 2 grid.
-static void tilePos(int col, int row, int &x0, int &y0) {
-  int totalW = TILE_PX * TILE_COLS + TILE_GAP * (TILE_COLS - 1);
-  int totalH = TILE_PX * TILE_ROWS + TILE_GAP * (TILE_ROWS - 1);
-  x0 = (SCREEN_W - totalW) / 2 + col * (TILE_PX + TILE_GAP);
-  y0 = (SCREEN_H - totalH) / 2 + row * (TILE_PX + TILE_GAP) - 14;
+static int tileX(int c) { return TILE_X0 + c * (TILE_SZ + TILE_GAPX); }
+static int tileY(int r) { return TILE_Y0 + r * (TILE_SZ + TILE_GAPY); }
+
+static lv_obj_t *makeTile(lv_obj_t *parent, int col, int row, uint32_t bg,
+                          const char *name) {
+  lv_obj_t *b = lv_btn_create(parent);
+  lv_obj_set_size(b, TILE_SZ, TILE_SZ);
+  lv_obj_set_pos(b, tileX(col), tileY(row));
+  lv_obj_set_style_bg_color(b, lv_color_hex(bg), 0);
+  lv_obj_set_style_radius(b, 16, 0);
+  lv_obj_set_style_pad_all(b, 0, 0);
+  lv_obj_set_style_shadow_width(b, 0, 0);
+  lv_obj_clear_flag(b, LV_OBJ_FLAG_SCROLLABLE);
+  lv_obj_add_event_cb(b, evTile, LV_EVENT_CLICKED, (void *)name);
+  return b;
 }
 
-static void addTile(lv_obj_t *parent, const lv_img_dsc_t *src,
-                    int col, int row, const char *name) {
-  int x0, y0;
-  tilePos(col, row, x0, y0);
-
-  lv_obj_t *btn = lv_btn_create(parent);
-  lv_obj_set_size(btn, TILE_PX, TILE_PX);
-  lv_obj_set_pos(btn, x0, y0);
-  lv_obj_set_style_bg_opa(btn, LV_OPA_TRANSP, 0);
-  lv_obj_set_style_border_width(btn, 0, 0);
-  lv_obj_set_style_shadow_width(btn, 0, 0);
-  lv_obj_add_event_cb(btn, evTile, LV_EVENT_CLICKED, (void *)name);
-
-  lv_obj_t *im = lv_img_create(btn);
+static void addImg(lv_obj_t *parent, const lv_img_dsc_t *src) {
+  lv_obj_t *im = lv_img_create(parent);
   lv_img_set_src(im, src);
-  lv_obj_center(im);
-  // Same treatment as Shemi's panel: the artwork is untouched, LVGL
-  // pulls it toward black at draw time so it is not a lamp at night.
+  // The artwork is untouched. LVGL pulls it toward black at draw time
+  // so a white bed is not a lamp at three in the morning.
   lv_obj_set_style_img_recolor(im, lv_color_black(), 0);
   lv_obj_set_style_img_recolor_opa(im, TILE_DIM_OPA, 0);
+  lv_img_set_zoom(im, TILE_ZOOM);          // 200 px artwork, 175 px tile
+  lv_obj_center(im);
   lv_obj_clear_flag(im, LV_OBJ_FLAG_CLICKABLE);
 }
 
@@ -1184,31 +1215,25 @@ void buildHome() {
   scrHome = lv_obj_create(NULL);
   lv_obj_set_style_bg_color(scrHome, lv_color_hex(0x0B0E14), 0);
 
-  // Top row:    massage   radio   air conditioning
-  // Bottom row:  shades    light   fan
-  addTile(scrHome, &img_bed_off,    0, 0, "massage");
-  addTile(scrHome, &img_radio_off,  1, 0, "radio");
-  addTile(scrHome, &img_ac_off,     2, 0, "air conditioning");
-  addTile(scrHome, &img_shade_open, 0, 1, "shades");
-  addTile(scrHome, &img_lamp,       1, 1, "light");
-  addTile(scrHome, &img_fan,        2, 1, "fan");
+  // --- row 0: massage, radio, air conditioning, fan ---
+  addImg(makeTile(scrHome, 0, 0, 0x181C22, "massage"),          &img_bed_off);
+  addImg(makeTile(scrHome, 1, 0, 0x181C22, "radio"),            &img_radio_off);
+  addImg(makeTile(scrHome, 2, 0, 0x181C22, "air conditioning"), &img_ac_off);
+  addImg(makeTile(scrHome, 3, 0, 0x181C22, "fan"),              &img_fan);
 
-  // brightness, along the bottom
-  lv_obj_t *sl = lv_slider_create(scrHome);
-  lv_obj_set_size(sl, 620, 18);
-  lv_slider_set_range(sl, 0, 90);
-  lv_slider_set_value(sl, dimPct, LV_ANIM_OFF);
-  lv_obj_align(sl, LV_ALIGN_BOTTOM_MID, 0, -18);
-  lv_obj_add_event_cb(sl, evDim, LV_EVENT_VALUE_CHANGED, NULL);
+  // --- row 1: light, shades, settings ---
+  addImg(makeTile(scrHome, 0, 1, 0x14262C, "light"),  &img_lamp);
+  addImg(makeTile(scrHome, 1, 1, 0x181C22, "shades"), &img_shade_open);
 
-  // a small way back to the diagnostics page
-  lv_obj_t *b = lv_btn_create(scrHome);
-  lv_obj_set_size(b, 76, 42);
-  lv_obj_align(b, LV_ALIGN_TOP_RIGHT, -12, 12);
-  lv_obj_add_event_cb(b, evGoTest, LV_EVENT_CLICKED, NULL);
-  lv_obj_t *bl2 = lv_label_create(b);
-  lv_label_set_text(bl2, "info");
-  lv_obj_center(bl2);
+  lv_obj_t *tileSet = makeTile(scrHome, 2, 1, 0x232A33, "settings");
+  lv_obj_t *si = lv_label_create(tileSet);
+  lv_label_set_text(si, LV_SYMBOL_SETTINGS);
+  lv_obj_set_style_text_font(si, &lv_font_montserrat_40, 0);
+  lv_obj_set_style_text_color(si, lv_color_hex(0x8A94A0), 0);
+  lv_obj_center(si);
+
+  // The eighth slot at (3,1) is deliberately empty. It is the room the
+  // next idea will need.
 }
 
 // ============================================================
@@ -1269,13 +1294,10 @@ void buildTestPage() {
   lv_obj_align(sl, LV_ALIGN_TOP_LEFT, 40, 356);
   lv_obj_add_event_cb(sl, evDim, LV_EVENT_VALUE_CHANGED, NULL);
 
-  lv_obj_t *hb = lv_btn_create(scr);
-  lv_obj_set_size(hb, 76, 42);
-  lv_obj_align(hb, LV_ALIGN_TOP_RIGHT, -12, 12);
-  lv_obj_add_event_cb(hb, evGoHome, LV_EVENT_CLICKED, NULL);
-  lv_obj_t *hl = lv_label_create(hb);
-  lv_label_set_text(hl, "home");
-  lv_obj_center(hl);
+  // TEST 028: no button back to home, because there is no longer a
+  // button to get here. The diagnostics page is still built and still
+  // updated; it is simply not on the way to anywhere. Everything it
+  // shows also arrives on serial every twenty seconds.
 }
 
 // ============================================================
@@ -1451,8 +1473,8 @@ void loop() {
 }
 
 // ============================================================
-//  IRA PANEL - TEST 027 - end of file
+//  IRA PANEL - TEST 028 - end of file
 //  Hardware layer only: RGB screen, GT911 touch, CH422G backlight,
 //  I2C scan, boot photo, software dimmer.
-//                        TEST  027
+//                        TEST  028
 // ============================================================
