@@ -1,0 +1,4343 @@
+/* ============================================================
+ *                        TEST  081
+ * ============================================================
+ *  TEST 081 - WHOSE PANEL IS THIS
+ *
+ *    At power-on each panel shows its owner's photograph for a
+ *    few seconds. Shemi's panel shows Shemi, Ira's shows Ira.
+ *
+ *    PANEL_ID picks the picture, and that one line is the ONLY
+ *    difference between the two builds. Everything after the
+ *    photo - home screen, tile order, clock - is deliberately
+ *    identical on both, because the two of you swap sides and an
+ *    interface that changes with the side of the bed would be
+ *    confusing at exactly the wrong hour.
+ *
+ *    The photos are COMPILED IN, not read from the SD card. The
+ *    card is not fitted, its pins used to belong to the removed
+ *    microphone, and a boot screen that depends on a card is a
+ *    boot screen that one day will not appear. Cost: about 150 KB
+ *    of a 16 MB flash.
+ *
+ *    Practical benefit beyond the pleasure of it: after a flash
+ *    you know within a second which board you just wrote to.
+ *
+ *  TEST 080 - DARK ENOUGH TO SLEEP NEXT TO, AND A LUX READOUT
+ *
+ *    The About tab now shows LIVE light level and the backlight
+ *    duty the firmware has chosen from it. Both update twice a
+ *    second. This exists because the calibration numbers cannot
+ *    be guessed from a desk - they have to be read in the actual
+ *    room, at the actual hour, and until now lux only ever went
+ *    to the serial port, which means a laptop by the bed.
+ *
+ *    To calibrate: open Settings -> About and write down the lux
+ *    with the room lit, with only the night lamp, and in full
+ *    dark. Then, in full dark, lower the backlight slider until
+ *    the clock is only just readable without glasses and note
+ *    the percent. Those four numbers set the whole curve.
+ *    First real night in the bed produced one verdict: the panel
+ *    is a lamp. Three separate causes, three separate fixes.
+ *
+ *    1. THE BACKLIGHT FLOOR. It was adjustable all along - GPIO2,
+ *       LEDC channel 7 - but the Settings slider bottomed out at
+ *       30 percent and the stored default was 85. Even "darkest"
+ *       was a third of full power. The slider now goes down to 2.
+ *
+ *    2. THE SCREENSAVER HAD NO FLOOR OF ITS OWN. It used the same
+ *       number as the daytime UI. There is now a SECOND slider,
+ *       "Night backlight", default 4 percent, used only while the
+ *       screensaver is up, with its own low ceiling so that even a
+ *       lit room cannot drive it back to full.
+ *
+ *    3. THE WHITE BED TILE. A 200x200 white image at full backlight
+ *       is a light source no matter what the backlight does. All
+ *       four home tiles are now recoloured toward black by
+ *       TILE_DIM_OPA. The artwork is untouched - this is LVGL
+ *       recolouring at draw time, so one number changes it all.
+ *
+ *    SAVER_DIM also drops 56 -> 38 for the dial and the hands.
+ *
+ *    And the temperature is BIGGER: temp_font.h is regenerated at
+ *    104 px digits, up from 80. REPLACE include/temp_font.h with
+ *    the new file alongside this one, or the build will not match.
+ *
+ *  TEST 078 - CLOCK TAB SPACING
+ *    The time row was 220 px tall to hold 64 px buttons, so the
+ *    date row landed inside it. The time row is now only as tall
+ *    as it needs to be, and the date sits well clear below it.
+ *
+ *  TEST 077 - THE SLIDERS FOLLOW THE PATTERN
+ *    The panel has always talked down the wire and never listened.
+ *    It listens now. The bed box (TEST 012) sends one frame per
+ *    zone whenever a level changes - {bedId, 20, zone, level} -
+ *    and the four upright sliders track it live. Pick a mode and
+ *    you watch the massage travel down the screen as it travels
+ *    down the bed.
+ *    The Hebrew words under the sliders are gone. At 30 px wide
+ *    they were unreadable, so the columns are simply numbered
+ *    1 to 4, head at the left.
+ *
+ *  TEST 076 - THE DATE CAN BE SET FROM THE SCREEN
+ *    Settings, Clock tab, gains a second row: day, month and
+ *    year, with the same plus and minus buttons as the time,
+ *    and one button that writes both rows to the DS3231.
+ *    The date is seeded from the chip when the tab is built,
+ *    and the month length is respected, February included.
+ *
+ *  TEST 075 - THE MASSAGE SCREEN REBUILT
+ *    The bed selector is gone. Ira is not using the system, so
+ *    every command goes to bed 1 and there is nothing to choose.
+ *    The demo is gone with it.
+ *    Top right: the time, the date and the temperature with a
+ *    small c, in that order.
+ *    Twelve mode tiles, four across and three down, on the left.
+ *    Colour is by family, not by sequence: green rows travel
+ *    along the body, purple crosses it, orange is rhythm and
+ *    atmosphere. The running mode is lit and outlined.
+ *    Four zone sliders now stand UPRIGHT down the right side.
+ *    Bottom row unchanged: 15, 30, 60 and off.
+ *    Colours are deep and saturated rather than bright - this is
+ *    a screen that gets looked at in the dark.
+ * ------------------------------------------------------------
+ *  PANEL FIRMWARE  (ESP32-8048S043, ESP32-S3-WROOM-1 N16R8)
+ *  Adjustable Bed Massage Retrofit - Revision 4
+ *  Stage 3: LVGL UI - home + massage + settings + screensaver
+ * ------------------------------------------------------------
+ *  WHAT THIS BUILD IS
+ *  TEST 041-044 were lost (no copy on disk, Drive or chat).
+ *  TEST 045 rebuilds those four steps on top of TEST 040,
+ *  which was itself a FAILED minute-roller attempt. The broken
+ *  rollers are gone. A new number was used instead of 044 so a
+ *  reconstruction is never mistaken for the original.
+ *
+ *  REBUILT FROM 040:
+ *   041 - memory-safe photos: 600 KB size guard, PSRAM buffer
+ *         with heap fallback, always freed. No freeze at 38+.
+ *       - Files tab slideshow, 2 s per photo, touch to stop.
+ *   042 - time picker rebuilt as +/- buttons (rollers never
+ *         worked), 12-hour display with AM/PM everywhere.
+ *   043 - clock hands dimmed to about 70 percent.
+ *   044 - null guards on every label update. Fixes the
+ *         LoadProhibited reboot at EXCVADDR 0x00000022, which
+ *         was a timer touching a label before it was built.
+ *
+ *  NEW IN 074 - the room temperature on the AC screen:
+ *
+ *   It was there, just easy to miss: 20 pt grey text tucked at
+ *   x 560. It now sits properly to the RIGHT OF THE PLUS BUTTON,
+ *   in 40 pt, with a small "room" caption above it and a small
+ *   "c" beside it - the same shape as the target temperature on
+ *   the left, so the screen reads as: what you asked for, and
+ *   what the room actually is.
+ *
+ *   The reading comes from the panel's own SHT31, not from the
+ *   air conditioner. That matters: this Breeze does not report
+ *   its target back, so the big number on the left is only what
+ *   was last commanded, while the number on the right is
+ *   measured. They are not the same kind of fact.
+ *
+ *  NEW IN 073 - the settings screens are grey, not white:
+ *
+ *   LVGL's light theme was painting every tab page near white,
+ *   which glared in a dark bedroom and made every earlier text
+ *   colour a fight. All five tab pages, the tab bar itself and
+ *   the tabview background are now a mid grey, and the text is
+ *   set to suit it rather than to survive it.
+ *
+ *     SET_PAGE_BG   0x2A3038   the page behind everything
+ *     SET_BAR_BG    0x1E242B   the tab bar
+ *     SET_TEXT_COL  0xE8ECF2   primary text, near white on grey
+ *     SET_DIM_COL   0x9AA6B2   secondary text
+ *
+ *   The text colours INVERTED, because the background did. They
+ *   were near black to survive a white page; on grey they need
+ *   to be light. Anything left dark would now be the thing that
+ *   disappears.
+ *
+ *  NEW IN 072 - the headers now say when they are out of date:
+ *
+ *   TEST 071 failed to build with
+ *     'TITLE_HOME' was not declared in this scope
+ *     note: suggested alternative: 'LV_KEY_HOME'
+ *   which points nowhere useful. The real cause was an OLD
+ *   font_hebrew.h still sitting in include/ - the one from TEST
+ *   064, which had HEB_MAZGAN but neither HEB_BEDROOM nor
+ *   TITLE_HOME, and no Latin glyphs either.
+ *
+ *   Every header this file depends on is now checked at the top,
+ *   with a message naming the file and the test that produced it.
+ *   A stale header can no longer hide behind a confusing error.
+ *
+ *   No other change. If TEST 071 already built for you, this is
+ *   the same firmware.
+ *
+ *  NEW IN 071 - THE LAMP NO LONGER ANIMATES AT ALL:
+ *
+ *   The flickering is gone because the cause is gone. Slowing the
+ *   colour fade from 60 ms to 400 ms in TEST 068 was not enough:
+ *   ANY repeated redraw of a 200 px image on this RGB panel shows
+ *   as a twitch across the whole screen, because the panel scans
+ *   continuously and LVGL has to repaint the region while it does.
+ *
+ *   So the lamp is now a still picture with two states and nothing
+ *   in between. It is recoloured ONCE, at the moment it is pressed:
+ *     off  grey
+ *     on   warm amber
+ *   No timer, no stepping, no repaint unless something is pressed.
+ *   The screen is completely static while nothing is happening.
+ *
+ *   The colour cycling was a nice idea and it cost calm, which
+ *   matters more on something you look at from bed.
+ *
+ *   AC DIMMED TO 75 PERCENT. The white unit glared beside the
+ *   softer tiles. tile_img.h was rebuilt and must be replaced.
+ *
+ *  NEW IN 070 - the title is Hebrew:
+ *
+ *   "BG BEDROOM" becomes "BG" followed by the Hebrew for bedroom.
+ *
+ *   font_hebrew.h WAS REGENERATED and must be replaced. It now
+ *   carries printable ASCII 0x20-0x7E as well as the Hebrew
+ *   alphabet, so a single font can draw "BG" and the Hebrew in
+ *   the same label. The old one was Hebrew only, and the Latin
+ *   would have come out as empty boxes.
+ *
+ *   LVGL's bidi is off in this build, so the Hebrew is stored
+ *   PRE-REVERSED in the header as HEB_BEDROOM, and TITLE_HOME
+ *   joins it to "BG ". Nothing in this file reverses anything.
+ *   Verified: the escape decodes to the reversed word, which read
+ *   right to left is the correct Hebrew.
+ *
+ *  NEW IN 069 - the radio screen, and a quieter screensaver:
+ *
+ *   THE RADIO SCREEN EXISTS NOW. It was a "coming soon"
+ *   placeholder. Eight station tiles, a now-playing line, a
+ *   volume slider 0-21, Sleep 30 and Stop. Every button sends a
+ *   UART message to the audio node and prints it on serial.
+ *     6 RADIO_PLAY   target = station number
+ *     7 RADIO_STOP
+ *     8 RADIO_VOL    value 0..21
+ *     9 RADIO_SLEEP  value = minutes
+ *   Kan 88 and Kan Gimel carry their real stream URLs and their
+ *   own brand colours. NOTHING PLAYS YET - the audio node still
+ *   has to be built. The panel half can be finished regardless.
+ *   Spotify has a tile that says plainly it is not connected.
+ *
+ *   SCREENSAVER, quieter again:
+ *     SAVER_DIM 75 -> 56, so the dial, the hands and the cap all
+ *     draw at 56 percent
+ *     the temperature is SMALLER again - temp_font.h regenerated
+ *     at 80 px, was 108, was 150
+ *     it moved RIGHT, TEMP_CX 628 -> 664
+ *     and it is GREY now, 0x9D15, not blue and not green
+ *
+ *  NEW IN 068 - colours, calm, and a simpler status line:
+ *
+ *   SIX SOFT TILE COLOURS, one per tile, baked into the images:
+ *     bed amber, radio green, AC blue, lamp teal, shutters brick,
+ *     settings violet grey. All muted; none of them shout.
+ *
+ *   THE WHOLE SCREEN TWITCHED while the lamp was lit. The fade was
+ *   restyling the tile's background every 60 ms, and repainting a
+ *   200 px tile under six others that often was enough to make the
+ *   RGB panel stutter. Now the fade only recolours the lamp IMAGE,
+ *   never the tile behind it, and steps every 400 ms instead of 60.
+ *   Same slow drift, a sixteenth of the redraw.
+ *
+ *   THE SHADE TILE NO LONGER ANIMATES. Press it and the picture
+ *   changes at once - shutters open, or shutters shut. The command
+ *   still goes out and the 20 s timer still runs underneath, but
+ *   nothing on screen moves.
+ *
+ *   TITLE is "BG BEDROOM", not "Ben Panel".
+ *
+ *   STATUS LINE is just the TIME and the TEMPERATURE, in that
+ *   order. Pressure, the trend arrow, humidity and the degree
+ *   symbol are all gone from the home screen. They are still
+ *   measured, still on the About tab, still on serial.
+ *
+ *  NEW IN 067 - THE HOME SCREEN REBUILT: 3 UP, 3 DOWN, NO WORDS
+ *
+ *   Six square 200x200 tiles in two rows of three, each one a
+ *   photograph. No captions, in any language - the picture is the
+ *   label. Grid: 78 px left margin, 22 px between columns, 16 px
+ *   between rows, 64 px of status strip along the top.
+ *
+ *     BED     short press opens the massage screen
+ *     RADIO   short press opens the radio screen, dial lights when
+ *             something is playing
+ *     AC      SHORT press toggles the air conditioner and the
+ *             louvre opens with air falling out of it
+ *             LONG press, 3 s, opens the AC screen
+ *     LIGHT   the Morning Glory lamp. Press to toggle. When lit it
+ *             drifts through colour, fading over LAMP_FADE_MS
+ *     SHADE   press to travel, press again to stop. Twenty seconds
+ *             end to end, then the picture settles to the other
+ *             state - shutters open, or shutters closed
+ *     SETTINGS opens the settings screen
+ *
+ *   THREE HEADERS ARE REQUIRED IN include/
+ *     tile_img.h    bed, radio, AC and shutters, 200x200 each
+ *     lamp_img.h    the lamp, with alpha so it can be recoloured
+ *     font_hebrew.h no longer used on the home screen, but the
+ *                   AC screen still needs it
+ *
+ *   The floating gear button is gone; settings is a tile now.
+ *
+ *  NEW IN 066 - the screensaver, softened:
+ *
+ *   DIMMER. The whole diver clock now draws at SAVER_DIM percent,
+ *   75 by default. The dial is dimmed ONCE as it is decoded into
+ *   PSRAM, so it costs nothing per frame, and the hands and text
+ *   use pre-dimmed colours. Change the one number to taste.
+ *
+ *   TEMPERATURE SMALLER. temp_font.h was regenerated at 108 px
+ *   instead of 150, and the C at 34 instead of 46. The font is
+ *   baked at a fixed size, so this needed a new header - install
+ *   the new temp_font.h alongside this file.
+ *
+ *   TEMPERATURE IS LIGHT BLUE, not green. 0x4CF7, which is
+ *   #60D0FF taken down to 75 percent, so it matches the dimming
+ *   of everything else. The same blue as the home screen's
+ *   sensor readout, which ties the two together.
+ *
+ *   The clock HANDS stay green - they read as hands, and the
+ *   contrast against the blue temperature helps tell them apart.
+ *   They are dimmed to 75 percent like everything else.
+ *
+ *  NEW IN 065 - six fixes from looking at the real screen:
+ *
+ *   1 ABOUT SAID "Humidity: no". It was still asking the BMP280,
+ *     which cannot measure humidity, and never asked the SHT31
+ *     that TEST 062 added. It now reports the SHT31 and shows the
+ *     live readings.
+ *
+ *   2 SETTINGS TEXT WAS TOO PALE against LVGL's light theme.
+ *     All of it is dark now, via SET_TEXT_COL and SET_DIM_COL.
+ *
+ *   3 THE TILES JITTERED every couple of seconds. Cause: the home
+ *     screen carried the microphone bar and level text, rewritten
+ *     on EVERY loop pass with text whose width kept changing, so
+ *     LVGL invalidated and reflowed constantly. Compounded by
+ *     refreshAC() running once a second even when the AC screen
+ *     was not on show. Both are fixed - see 4.
+ *
+ *   4 MICROPHONE UI REMOVED from the home screen: the level bar,
+ *     the "mic 12%" text, the word counter and the Learn button.
+ *     The voice code still runs and still prints to serial; only
+ *     the on-screen clutter is gone. refreshAC() now runs only
+ *     while the AC screen is actually visible.
+ *
+ *   5 SHADE TILE was too pale and too square. Darker glass, warmer
+ *     frame, rounder corners, softer blind.
+ *
+ *   6 LAMP COLOUR CYCLE was jumpy. It now FADES between colours,
+ *     interpolating every 60 ms across LAMP_FADE_MS, so the light
+ *     drifts rather than flicking.
+ *
+ *  NEW IN 064 - LIVING TILES, AND HEBREW:
+ *   THE HOME SCREEN NOW HAS FIVE TILES
+ *     Massage | Radio | AC | Light | Shade
+ *
+ *   LIGHT TILE - a photograph of the Morning Glory lamp
+ *   (Ayala Serfaty, Aqua Creations), from Shemi's own picture.
+ *     off  the image recoloured grey, still
+ *     on   the image recoloured through red, green, yellow and
+ *          amber, changing twice a second, because the real lamp
+ *          shifts colour and the movement itself says it is on
+ *   ONE image is stored and recoloured, not two, so the states
+ *   cannot drift apart and it costs 67 KB instead of 134 KB.
+ *
+ *   SHADE TILE - drawn with LVGL, no image needed.
+ *     resting  window clear (up) or covered (down)
+ *     moving   the shade travels over SHADE_TRAVEL_MS, 20 s, then
+ *              settles into the other state. Press again while it
+ *              is moving and it stops where it is.
+ *
+ *   AC TILE - two functions from one tile.
+ *     short press  toggles the AC on and off, no screen change
+ *     long press   opens the AC screen
+ *   Labelled in Hebrew. LVGL's bidi support is off in this build,
+ *   so the word is stored pre-reversed - see font_hebrew.h.
+ *
+ *   TWO NEW FILES ARE REQUIRED IN include/
+ *     lamp_img.h     the lamp photograph, 150x150
+ *     font_hebrew.h  Hebrew glyphs, the built-in fonts are Latin
+ *
+ *  NEW IN 063 - AC SCREEN, ROOM SCREEN, FOURTH HOME TILE:
+ *   The home screen now has FOUR tiles: Massage, Radio, AC, Room.
+ *
+ *   AC SCREEN - drives the Switcher Breeze, which sits away from
+ *   the beds and has line of sight to the Tadiran unit.
+ *     room temperature from the panel's own SHT31
+ *     target temperature with - and +
+ *     mode    cool / heat / dry / fan / auto
+ *     fan     low / med / high / auto
+ *     swing   on / off        (the Breeze API offers ONLY on/off,
+ *             there is no step-swing versus continuous-sweep)
+ *     power   on / off
+ *
+ *   ROOM SCREEN - 433 MHz, one transmitter on the audio node
+ *   sending different codes to two receivers.
+ *     shades  UP and DOWN. Press again while moving = STOP.
+ *             The panel has no feedback from the shades, so it
+ *             tracks its own idea of movement and gives up after
+ *             SHADE_TIMEOUT_MS in case the shade hit its limit.
+ *     light   on / off
+ *
+ *   NOTHING IS CONNECTED YET. Every button sends a UART message
+ *   and prints it on serial. The audio node has to grow the other
+ *   half: the Breeze protocol in C++, and an FS1000A transmitter.
+ *   The panel side can be built and seen on hardware today, which
+ *   is why it is being done first.
+ *
+ *   KNOWN LIMITATION, measured not guessed: this Breeze reports
+ *   target_temperature 0 no matter what it is really set to, so
+ *   the panel can only ever show what it last COMMANDED. Mode,
+ *   fan, swing and room temperature do read back correctly.
+ *
+ *  NEW IN 062 - SHT31 HUMIDITY, AND THE PRESSURE ARROW FIXED:
+ *   The I2C bus now carries five devices:
+ *     0x23 BH1750 light      0x44 SHT31 temp+humidity  (NEW)
+ *     0x57 AT24C32 EEPROM on the RTC board, unused
+ *     0x5D GT911 touch       0x68 DS3231 clock         (NEW)
+ *     0x76 BMP280 temp+pressure
+ *
+ *   - SHT31 is now the source for TEMPERATURE and HUMIDITY.
+ *     It is the more accurate air sensor. Written with raw
+ *     Wire calls in the same style as the BMP280 driver, so
+ *     no new library is needed.
+ *   - BMP280 is kept for PRESSURE and its trend only.
+ *   - Humidity finally appears - the panel has never shown it,
+ *     because the BMP280 does not measure it.
+ *
+ *   THE PRESSURE ARROW NEVER APPEARED, and it was a design
+ *   fault, not a bug. pressTrend only ever changed inside a
+ *   block gated on 30 minutes having passed, so every reboot
+ *   reset it to a dash and half an hour of uptime was needed
+ *   before it could move at all. It also wanted a 0.3 hPa
+ *   swing, which is a real weather change. Now: the first
+ *   reference is taken immediately, the window is 10 minutes,
+ *   the threshold is 0.1 hPa, and the actual pressure value is
+ *   displayed so the reading means something even when steady.
+ *   `trend` on the serial console forces a recalculation.
+ *
+ *  NEW IN 061 - IT ACTUALLY DETECTS THE WORD NOW:
+ *   Measured on TEST 060 with three references learned from live
+ *   speech: 10 repeats of the wake word scored 5.91-8.36, six
+ *   other words scored 13.02-23.86. No overlap, 1.56x gap.
+ *   WAKE_THRESHOLD is 10.5 - about 26% clear of both sides.
+ *   Adjust live with `th 9.5`; `dsp` shows the current value.
+ *   A duration gate runs BEFORE the DTW: a word whose length is
+ *   outside 0.5x-1.7x of the learned references is rejected
+ *   without the maths. On the measured data that threw out 4 of
+ *   the 6 non-words and lost none of the 10 true ones.
+ *   FIXED: the microphone was serviced only inside the ST_UI
+ *   branch, so it stopped the moment the screensaver came on -
+ *   exactly when the wake word matters. It now runs in every
+ *   state, and a detection wakes the screen.
+ *
+ *  NEW IN 060 - 059 would not compile:
+ *   the catch-all `else` for unknown commands was placed BEFORE
+ *   `else if (conBuf == "mic")`, so a terminal else sat in the
+ *   middle of the chain. Braces balanced, which is why a brace
+ *   check did not catch it. Moved to the end where it belongs.
+ *   059 is otherwise unchanged; a new number is used so there is
+ *   never a question of which 059 someone has.
+ *
+ *  NEW IN 059 - the console never saw your commands:
+ *   pollSerialCommands acted on '\n' and DISCARDED '\r'. Pressing
+ *   Enter in the PlatformIO monitor sends CR, so `ref` was thrown
+ *   away silently - 20 words captured, no reference ever stored.
+ *   Either terminator now ends a line, and platformio.ini gains
+ *   monitor_filters send_on_enter.
+ *   Also, no serial needed at all any more: a LEARN button on the
+ *   home screen stores the last word. THREE reference slots are
+ *   kept and a word is scored against the closest one, which
+ *   handles normal variation in how you say it far better than a
+ *   single template.
+ *
+ *  NEW IN 058 - MFCC FEATURES + DTW MATCHING:
+ *   TEST 057 measured 8 real words at 560-656 ms, spread 1.17x,
+ *   sd 33 ms. That consistency is what makes templates viable.
+ *   pre-emphasis -> 25 ms Hamming frames / 10 ms hop -> 512-pt FFT
+ *   -> 26 mel filters 300-8000 Hz -> log -> DCT -> 12 coefficients
+ *   -> cepstral mean normalisation. Matching is dynamic time
+ *   warping normalised by path length, so a word said a little
+ *   faster or slower still matches.
+ *   NOTHING ACTS ON A MATCH YET. It prints a distance so the
+ *   threshold comes from real numbers instead of a guess:
+ *     `ref`   store the last word as the reference
+ *     `dsp`   show feature and reference status
+ *   Say the wake word several times, then other words. If the two
+ *   groups separate, the threshold goes between them.
+ *
+ *  NEW IN 057 - PRE-ROLL, so the start of the word is not lost:
+ *   Measured on real speech at TEST 056: 9 words, 304-704 ms,
+ *   mean 516, sd 135. RMS is averaged over a 16 ms buffer and has
+ *   to climb 4x above the noise floor before capture starts, so
+ *   roughly the first 30-60 ms of every word was already gone -
+ *   exactly the part a wake word needs most.
+ *   A 250 ms ring buffer now runs continuously. When speech
+ *   triggers, that recent past is prepended, so the recording
+ *   begins BEFORE the sound that triggered it.
+ *   `mic` now also reports the spread of the last 8 words, which
+ *   is the number that says whether templates are viable.
+ *
+ *  NEW IN 056 - UTTERANCE DETECTION (still no recognition):
+ *   054 proved audio arrives. This finds WORDS in it - start, end,
+ *   duration, peak - and keeps the samples in a 2 s PSRAM buffer.
+ *   Both recognition paths need this: a trained model needs recorded
+ *   samples, template matching needs a clean utterance to compare.
+ *   The threshold is ADAPTIVE. A fixed one works in a silent room
+ *   and fails with a fan running, so a noise floor is tracked while
+ *   nothing is being said and speech must rise well above it.
+ *   Serial commands: `dump` prints the last utterance as base64,
+ *   `mic` prints the current levels and noise floor.
+ *
+ *  NEW IN 055 - the 1 Hz screensaver flicker:
+ *   Every tick repainted all 800x480: dial first, hands after. The
+ *   RGB panel scans continuously, so it could show a frame with the
+ *   dial and no hands. That gap was the flash. Caching the dial in
+ *   046 removed the SD read and the decode, but not the gap.
+ *   Now a 424x424 PSRAM buffer over the clock face is filled from
+ *   the cached dial, the hands are rasterised INTO it, and the
+ *   finished image is blitted ONCE - so no half-drawn frame is ever
+ *   on screen. The temperature repaints only when the whole number
+ *   changes, not once a second. Falls back to the old path if the
+ *   buffer will not allocate.
+ *
+ *  NEW IN 054 - MICROPHONE BRING-UP (capture only, no keyword):
+ *   INMP441 on I2S0.  SD=GPIO11(DIN)  SCK=GPIO12(BCK)  WS=GPIO13
+ *   VDD=3.3V, GND=GND, L/R=GND (left channel).
+ *   A live level bar sits at the bottom of the HOME screen and the
+ *   serial log prints RMS and peak once a second. That is the whole
+ *   purpose of this test: prove audio arrives before writing any
+ *   recognition on top of it.
+ *   Four bugs from the old uncompiled microphone.cpp are fixed here:
+ *   32-bit reads (not 16), mck_io_num set explicitly (it was being
+ *   left at GPIO0), STAND_I2S format, and a non-blocking read so
+ *   LVGL is never stalled.
+ *
+ *  NEW IN 053 - SD CARD RETIRED, DIAL MOVED INTO FLASH:
+ *   The panel exposes only 7 GPIOs (11,12,13,19,20,17,18) and all
+ *   were taken. The INMP441 microphone needs 11/12/13, which were
+ *   the SD card's MOSI/CLK/MISO. The card loses.
+ *   - ENABLE_SD is a switch, not a deletion. Set it back to 1 when
+ *     the microphone moves to the WT32-ETH01 and the pins are free.
+ *   - With ENABLE_SD 0, SPI.begin() and SD.begin() are never called,
+ *     so CS is never asserted, the card holds its data line high-Z
+ *     and the microphone owns the bus safely.
+ *   - the dial now lives in flash (include/dial_image.h, 16921 B of
+ *     a 16 MB part) and no longer depends on the card at all.
+ *   - LOST while ENABLE_SD is 0: the photo slideshow, the Files
+ *     browser and the welcome photo.
+ *
+ *  NEW IN 052:
+ *   - Settings > Clock: the hour, colon and minute were 0xBFEFFF,
+ *     a very light blue. LV_CONF_SKIP leaves LV_THEME_DEFAULT_DARK
+ *     at 0, so the tab page behind them is the LIGHT theme's near
+ *     white - light blue on white, effectively invisible. They are
+ *     black now. Named SET_TEXT_COL so it is one edit, not three.
+ *   - the same washed-out combination applies to the About text and
+ *     the massage note; left alone for now, see SET_TEXT_COL.
+ *
+ *  NEW IN 051 - temp_font.h regenerated, 050 would not compile:
+ *   GFXglyph stores xOffset/yOffset as int8_t and GFXfont stores
+ *   yAdvance as uint8_t. Measured from the baseline, 150 px digits
+ *   need yOffset -147 and yAdvance 284 - both overflow. Offsets are
+ *   now measured from the TOP OF THE DIGITS, so digits get yOffset 0
+ *   and every field fits. The cursor y is therefore the digit top,
+ *   not the baseline. '.' was dropped: it would sit ~150 px below
+ *   the reference and cannot fit int8_t either.
+ *
+ *  NEW IN 050:
+ *   - the temperature uses a real TrueType-derived GFX font
+ *     (include/temp_font.h) instead of the built-in 5x7 bitmap
+ *     scaled 20x. Digits are 150 px, the C is 46 px, both drawn
+ *     from outlines so the curves are smooth.
+ *   - placement now comes from getTextBounds() rather than the
+ *     6x8 cell arithmetic, which no longer applies.
+ *
+ *  NEW IN 049:
+ *   - temperature digits smaller; the C keeps its size and moves to
+ *     the right of the digits, on the same bottom line.
+ *   - dial buffer cleared to black before decode, so a failed decode
+ *     shows black rather than uninitialised PSRAM (a blue gradient).
+ *   - the decode callback counts blocks; the cache is only trusted if
+ *     at least one block was actually written.
+ *   - any dial failure is drawn ON SCREEN, no serial monitor needed.
+ *
+ *  NEW IN 048 - screensaver layout:
+ *   - clock face moved LEFT. Its centre is now CLOCK_CX/CLOCK_CY,
+ *     one place instead of 400,240 repeated three times.
+ *   - temperature fills the freed space on the right, much larger
+ *     (character cell is 6*size wide by 8*size tall, size 24 =
+ *     144 x 192 px per digit), still whole degrees.
+ *   - REQUIRES the matching left-positioned dial image on the SD
+ *     card. A centred dial with CLOCK_CX=240 will not line up.
+ *
+ *  NEW IN 047 - fixes the confirmed boot crash:
+ *   Guru Meditation (StoreProhibited) EXCVADDR 0x00000098 in
+ *   lv_obj_class_create_obj <- lv_list_add_btn <- populateFiles.
+ *   LVGL's heap defaults to 32 KB; one list button per SD file at
+ *   boot exhausted it and the allocator's NULL was dereferenced.
+ *   - the Files list is built when you OPEN the Files tab, and
+ *     freed when you leave it. Nothing is built at boot.
+ *   - populateFiles checks lv_mem_monitor() before every row and
+ *     stops early instead of letting the allocation fail.
+ *   - hard cap of BROWSE_MAX_SHOWN rows.
+ *   - platformio.ini gains -DLV_MEM_SIZE=65536 for headroom.
+ *
+ *  NEW IN 046:
+ *   - dial JPEG decoded ONCE into PSRAM at boot, then blitted each
+ *     tick. 045 re-read and re-decoded it from SD every second.
+ *   - temperature moved to the right margin, drawn very large,
+ *     whole degrees only (no .1 / .2) on every clock face.
+ *   - boot now prints whether the dial was found and cached, so a
+ *     missing /diver_dial.jpg can no longer fail silently.
+ *
+ *  NOT TESTED ON HARDWARE. TEST 040 ran; 041-044 were tested by
+ *  Shemi but their source is gone, so the code below is written
+ *  from the change descriptions, not recovered. Flash it and
+ *  watch the serial monitor.
+ * ------------------------------------------------------------
+ *  Board: ESP32-8048S043 | 800x480 ST7262 RGB | GT911 touch
+ *  I2C SDA=19 SCL=20 | SD CS=10 MOSI=11 CLK=12 MISO=13 (FAT32)
+ *  UART1 to bed box: TX=IO17 RX=IO18 @115200 via P3
+ *  TEST_NUMBER 74 - printed at boot AND shown on screen.
+ * ============================================================ */
+
+#include <Arduino.h>
+#include <math.h>
+#include <string.h>
+#include <Wire.h>
+#include <SPI.h>
+#include <SD.h>
+#include <driver/i2s.h>        // TEST 054: INMP441 microphone
+#include <JPEGDEC.h>
+#include "boot_photo.h"        // TEST 081: both boot photographs
+#include <Arduino_GFX_Library.h>
+#include "temp_font.h"          // TEST 050: TempBig / TempSmall, put it in include/
+#include "dial_image.h"         // TEST 053: the dial, embedded in flash
+#include "lamp_img.h"           // TEST 064: the Morning Glory photograph
+#include "tile_img.h"           // TEST 067: bed, radio, AC, shutters
+#include "font_hebrew.h"        // TEST 070: Hebrew AND Latin glyphs
+
+// ============================================================
+//  TEST 072: check the headers are the current ones.
+//  A stale header otherwise fails somewhere deep in the code with
+//  an error that names a symbol rather than the file at fault.
+// ============================================================
+#ifndef TITLE_HOME
+#error "font_hebrew.h is out of date. Install the one from TEST 070 - it adds Latin glyphs, HEB_BEDROOM and TITLE_HOME. The old one had Hebrew only."
+#endif
+#ifndef HEB_MAZGAN
+#error "font_hebrew.h is missing HEB_MAZGAN. Install the version from TEST 070."
+#endif
+#include <lvgl.h>
+#include <Preferences.h>
+
+#define TEST_NUMBER 81
+
+// ---- backlight ----
+#define GFX_BL 2
+#define BL_CH 7
+#define BL_FREQ 5000
+#define BL_RES 8
+const float LUX_FLOOR = 2.0f, LUX_CEIL = 400.0f;
+int brightFloor = 40;         // settings-adjustable, daytime UI floor
+// TEST 080: the screensaver gets its OWN floor and its own ceiling. At
+// night this is the only number that matters, and 4 percent on this panel
+// is a faint glow you can read without glasses and sleep beside.
+int saverFloor  = 4;          // settings-adjustable
+#define SAVER_CEIL 45         // even a bright room will not exceed this
+float targetDuty = 255, curDuty = 255;
+// TEST 080: declared up here, not with the other Settings widgets, because
+// refreshAbout() is defined long before that block.
+lv_obj_t *lblAbout = NULL;
+
+// ---- SD ----
+// ---- TEST 054: INMP441 microphone (I2S0) ----
+// These are the SD card's old pins. Wired: SD->11, SCK->12, WS->13,
+// VDD->3.3V, GND->GND, L/R->GND. ENABLE_SD must stay 0 while this is 1.
+#define ENABLE_MIC       1
+#define MIC_DIN_PIN      11
+#define MIC_BCK_PIN      12
+#define MIC_WS_PIN       13
+#define MIC_PORT         I2S_NUM_0
+#define MIC_SAMPLE_RATE  16000
+#define MIC_FRAMES       256      // 32-bit samples per read
+
+// ---- TEST 056: utterance detection ----
+#define UTT_MAX_MS       2000     // longest word we will keep
+#define UTT_MIN_MS       220      // shorter than this is a click, not a word
+#define UTT_HANG_MS      280      // quiet for this long ends the utterance
+#define UTT_MAX_SAMPLES  ((MIC_SAMPLE_RATE / 1000) * UTT_MAX_MS)
+#define UTT_START_MULT   4.0f     // RMS must exceed noiseFloor * this
+#define UTT_STOP_MULT    2.0f     // ...and fall below this to end
+#define UTT_ABS_FLOOR    0.0035f  // absolute minimum, for a truly silent room
+// TEST 057: audio kept before the trigger, so the word's onset survives
+#define PRE_ROLL_MS      250
+#define PRE_ROLL_SAMPLES ((MIC_SAMPLE_RATE / 1000) * PRE_ROLL_MS)
+#define UTT_BUF_SAMPLES  (UTT_MAX_SAMPLES + PRE_ROLL_SAMPLES)
+#define UTT_HISTORY      8        // durations kept for the spread report
+
+// ---- TEST 058: MFCC + DTW ----
+#define MFCC_FRAME       400      // 25 ms at 16 kHz
+#define MFCC_HOP         160      // 10 ms
+#define MFCC_NFFT        512
+#define MFCC_NMEL        26
+#define MFCC_NCEP        12       // c1..c12; c0 (loudness) is deliberately dropped
+#define MFCC_FMIN        300.0f
+#define MFCC_FMAX        8000.0f
+#define MFCC_MAX_FRAMES  240      // 2.4 s of hops, above the 2.25 s capture cap
+
+// ---- TEST 061: detection ----
+#define WAKE_THRESHOLD   10.5f    // chosen from measured data, see the banner
+#define WAKE_DUR_MIN     0.50f    // word length vs the learned average
+#define WAKE_DUR_MAX     1.70f
+#define WAKE_SHOW_MS     2500     // how long the banner stays up
+
+// TEST 053: 0 = the microphone owns GPIO 11/12/13. Set to 1 only when the
+// mic has moved to another board and the SPI pins are free again.
+#define ENABLE_SD 0
+
+#define SD_CS 10
+#define SD_MOSI 11
+#define SD_CLK 12
+#define SD_MISO 13
+#define WELCOME_FILE "/welcome_800x480.jpg"
+#define PHOTO_DIR "/photos"
+#define DIAL_FILE "/diver_dial.jpg"
+// TEST 066: how bright the screensaver draws, in percent. Applied to
+// the dial once at decode time, and baked into the hand colours below.
+#define SAVER_DIM 38        // TEST 080: was 56
+// TEST 048: where the clock face sits on the screensaver. Must match the
+// dial image on the card - the artwork in dial_left_*.jpg is centred on 240.
+#define CLOCK_CX 240
+#define CLOCK_CY 240
+// Temperature block, centred in the space to the right of the dial.
+#define TEMP_CX  664
+// TEST 050: sizes now come from the font in temp_font.h (digits 150 px,
+// C 46 px). TEMP_C_GAP is still the space between the digits and the C.
+#define TEMP_C_GAP   16
+// TEST 055: the off-screen compose region around the clock face. The
+// longest hand reaches 195 px plus its tip circle, so 212 covers it.
+#define CLK_REG_X0   28
+#define CLK_REG_Y0   28
+#define CLK_REG_W    424
+#define CLK_REG_H    424
+// Area wiped before the temperature is redrawn (only when it changes).
+#define TEMP_CLR_X   456
+#define TEMP_CLR_Y   130
+#define TEMP_CLR_W   344
+#define TEMP_CLR_H   250
+// TEST 052: Settings > Clock text. The tabview page uses LVGL's light
+// theme (near white), so light colours vanish. Black reads cleanly.
+// TEST 073: the settings pages are grey now, so the text is light.
+// These four are the only colours the settings screen should use.
+#define SET_PAGE_BG  0x2A3038      // the tab page behind everything
+#define SET_BAR_BG   0x1E242B      // the tab bar across the top
+#define SET_TEXT_COL 0xE8ECF2      // primary text on that grey
+#define SET_DIM_COL  0x9AA6B2      // secondary text, still readable
+bool haveDial = false;
+// TEST 054: microphone state
+bool  micReady   = false;
+float micRms     = 0.0f;   // 0..1
+float micPeak    = 0.0f;   // 0..1
+uint32_t micReads = 0;
+size_t   micSamples = 0;          // TEST 056: samples in the last read
+lv_obj_t *micBar = NULL, *micLbl = NULL;
+
+// TEST 056: utterance capture
+int16_t  *uttBuf     = NULL;      // PSRAM, UTT_MAX_SAMPLES int16
+size_t    uttLen     = 0;         // samples held in uttBuf (last complete word)
+size_t    uttFill    = 0;         // samples written while capturing
+bool      uttActive  = false;
+uint32_t  uttStartMs = 0, uttQuietMs = 0;
+size_t    uttFillAtQuiet = 0;     // fill level when the quiet period began
+uint32_t  uttCount   = 0;         // words accepted since boot
+uint32_t  uttLastMs  = 0;         // duration of the last accepted word
+float     uttLastPeak = 0.0f;
+float     micFloor   = 0.01f;     // adaptive noise floor (RMS units)
+lv_obj_t *uttLbl     = NULL;
+// TEST 057: continuous pre-roll ring
+int16_t  *preBuf     = NULL;
+size_t    preHead    = 0;         // next write position
+size_t    preCount   = 0;         // valid samples, saturates at PRE_ROLL_SAMPLES
+uint32_t  uttHist[UTT_HISTORY] = {0};
+uint8_t   uttHistN   = 0;
+
+// TEST 058: DSP working set
+static float fftRe[MFCC_NFFT], fftIm[MFCC_NFFT];
+static float hamWin[MFCC_FRAME];
+static int   melBin[MFCC_NMEL + 2];
+static float dctTab[MFCC_NCEP][MFCC_NMEL];
+static bool  dspReady = false;
+#define REF_SLOTS 3
+float   *mfccCur = NULL;                    // PSRAM: MAX_FRAMES * NCEP
+float   *mfccRefs[REF_SLOTS] = { NULL, NULL, NULL };
+int      refFrames[REF_SLOTS] = { 0, 0, 0 };
+int      curFrames = 0, refNext = 0, refCount = 0;
+uint32_t refMs[REF_SLOTS] = { 0, 0, 0 };    // learned word lengths
+uint32_t lastVoiceMs = 0;
+float    wakeThreshold = WAKE_THRESHOLD;
+uint32_t wakeCount = 0, wakeShownMs = 0;
+lv_obj_t *learnLbl = NULL, *wakeBanner = NULL;
+float   *dtwA = NULL, *dtwB = NULL;         // two rolling DP rows
+float    lastDist = -1.0f;
+
+// TEST 046: the dial is decoded once into PSRAM and reused every tick.
+uint16_t *dialBuf   = NULL;      // 800*480 RGB565 = 768000 bytes
+bool      dialCached = false;
+int       dialBlocks = 0;        // TEST 049: blocks the decoder actually wrote
+uint16_t *clockBuf  = NULL;      // TEST 055: off-screen compose buffer
+char      dialStatus[64] = "dial: not checked";
+#define WELCOME_MS 2000
+
+// ============================================================
+//  TEST 081: PANEL IDENTITY - the one line that differs
+// ============================================================
+//   1 = Shemi's panel (the ESP32-8048S043 by the left head)
+//   2 = Ira's panel   (the Waveshare ESP32-S3-Touch-LCD-4.3)
+// Set it, flash it, and the photograph confirms you were right.
+#define PANEL_ID 1
+
+#define BOOT_PHOTO_MS 3500     // how long the face stays up
+uint32_t saverTimeoutMs = 300000UL;   // settings-adjustable
+#define PHOTO_MS 2000
+
+// ---- UART to bed box (P3 header) ----
+#define BB_TX 17
+#define BB_RX 18
+enum Cmd { CMD_OFF = 0, CMD_ALL = 1, CMD_ZONE = 2,
+           CMD_MOTOR = 3, CMD_PRESET = 4, CMD_TIMER = 5 };
+uint8_t curBedId = 1;        // 1=bed1 2=bed2 0=both
+bool randomActive = false;
+uint32_t lastRandomMs = 0;
+
+// ---- I2C ----
+#define TOUCH_SDA 19
+#define TOUCH_SCL 20
+#define GT911_ADDR1 0x5D
+#define GT911_ADDR2 0x14
+#define BH1750_ADDR 0x23
+// TEST 062: SHT31 temperature + humidity
+#define SHT31_ADDR   0x44
+#define BME280_ADDR1 0x76
+#define BME280_ADDR2 0x77
+#define DS3231_ADDR 0x68
+bool haveDS3231 = false;
+uint8_t gt911Addr = 0, bme280Addr = 0;
+bool haveBH1750 = false, haveBME280 = false, isBME = false;
+bool haveSHT31 = false;        // TEST 062
+
+const int TOUCH_RAW_W = 480, TOUCH_RAW_H = 272;
+const int SCREEN_W = 800, SCREEN_H = 480;
+
+// ---- display ----
+Arduino_ESP32RGBPanel *rgbpanel = new Arduino_ESP32RGBPanel(
+  40, 41, 39, 42,
+  45, 48, 47, 21, 14,
+  5, 6, 7, 15, 16, 4,
+  8, 3, 46, 9, 1,
+  0, 8, 4, 8, 0, 8, 4, 8, 1, 14000000);
+Arduino_RGB_Display *gfx = new Arduino_RGB_Display(SCREEN_W, SCREEN_H, rgbpanel, 0, true);
+JPEGDEC jpeg;
+
+// ---- app state ----
+enum AppState { ST_UI, ST_SAVER, ST_PREVIEW };
+AppState state = ST_UI;
+uint32_t lastTouchMs = 0, photoShownMs = 0, lastSensorMs = 0, lastEaseMs = 0;
+
+#define MAX_PHOTOS 60
+char photoList[MAX_PHOTOS][64];
+int photoCount = 0, lastPhotoIdx = -1;
+
+// TEST 041: Files-tab slideshow. Runs inside ST_PREVIEW; a touch stops it.
+bool     slideOn     = false;
+int      slideIdx    = 0;
+uint32_t slideNextMs = 0;
+#define  SLIDE_MS 2000
+
+// ---- sensors ----
+float gLux = 0, gTemp = 0, gHum = -1, gPress = 0;
+float pressRef = 0;            // reference for trend
+bool  humOK = false, pressOK = false;   // TEST 062
+// TEST 062: was 30 min / 0.3 hPa, which meant the arrow never appeared
+#define PRESS_WINDOW_MS 600000UL       // 10 minutes
+#define PRESS_DELTA     0.1f           // hPa
+uint32_t pressRefMs = 0;
+int pressTrend = 0;            // -1 down, 0 steady, +1 up
+bool luxOK = false, tempOK = false;
+
+// ---- BME280 calibration ----
+uint16_t dig_T1; int16_t dig_T2, dig_T3;
+uint16_t dig_P1; int16_t dig_P2, dig_P3, dig_P4, dig_P5, dig_P6, dig_P7, dig_P8, dig_P9;
+uint8_t dig_H1, dig_H3; int16_t dig_H2, dig_H4, dig_H5; int8_t dig_H6;
+int32_t t_fine;
+
+// ---- LVGL ----
+static lv_disp_draw_buf_t draw_buf;
+static lv_color_t *lvbuf1;
+// TEST 044: every display pointer starts NULL so the guards below can work.
+lv_obj_t *scrHome=NULL, *scrMassage=NULL, *scrRadio=NULL, *scrAC=NULL,
+         *scrSettings=NULL, *scrBlank=NULL, *scrClock=NULL;
+lv_obj_t *clkGlow=NULL, *clkMain=NULL, *clkColon=NULL, *clkTemp=NULL;
+// analog clock
+lv_obj_t *anaScr=NULL, *anaFace=NULL, *anaHour=NULL, *anaMin=NULL,
+         *anaSec=NULL, *anaTemp=NULL, *anaCenter=NULL;
+lv_point_t hourPts[2], minPts[2], secPts[2];
+lv_style_t stHour, stMin, stSec;
+Preferences prefs;
+int setMinSmall = 60, setMinBig = 165;   // motor thresholds (panel copy)
+int randomChar = 1;                      // 0 gentle 1 lively 2 wild
+// file browser
+#define MAX_BROWSE 80
+#define SETTINGS_TAB_FILES 3     // Clock 0, Display 1, Massage 2, Files 3
+// TEST 047: limits that keep the Files list from exhausting LVGL's heap
+#define BROWSE_MAX_SHOWN 40      // hard cap on rows
+#define LV_FREE_FLOOR    10240   // stop if LVGL free heap drops below this
+#define LV_BIGGEST_FLOOR 3072    // ...or if the largest free block is small
+char browseList[MAX_BROWSE][80];
+int browseCount = 0;
+char previewPath[96];
+lv_obj_t *lblSensors=NULL, *lblTestNum=NULL;
+lv_obj_t *sliderZone[4], *lblZoneVal[4];
+const char *ZONE_NAME[4] = {"Head", "Shoulders", "Back", "Legs"};
+
+// ---- forward declarations ----
+int  jpegDrawCb(JPEGDRAW *p);
+bool showBootPhoto();              // TEST 081
+bool showPhoto(const char *path);
+void scanPhotos();
+void showRandomPhoto();
+bool gt911Probe();
+bool gt911Read(int16_t &x, int16_t &y, bool &touched);
+void i2cScan();
+bool bh1750Begin();
+bool bh1750Read(float &lx);
+bool bme280Begin();
+bool bme280Read(float &t, float &h, float &p);
+bool sht31Begin();                          // TEST 062
+bool sht31Read(float &t, float &h);         // TEST 062
+void setupBacklight();
+void computeTargetFromLux();
+void refreshAbout();               // TEST 080
+void easeBacklight();
+void sendMsg(uint8_t bed, uint8_t cmd, uint8_t target, uint8_t value);
+void learnReference();
+void clearReferences();
+void buildHome();
+void buildMassage();
+void buildRadio();
+void buildAC();
+void buildRoom();
+void refreshAC();
+void refreshRoom();
+void refreshBedTile();
+void refreshRadioTile();
+void refreshRadio();
+void buildBedSelector();            // TEST 075: no longer called, kept for reference
+void refreshBedButtons();
+uint8_t bcd2dec(uint8_t b);         // TEST 075: needed by ds3231GetDate above
+uint8_t dec2bcd(uint8_t d);
+void ds3231GetDate(int &d, int &m, int &y);
+void ds3231SetDate(int d, int m, int y);
+void buildSettings();
+void loadSettings();
+void saveSettings();
+void populateFiles(lv_obj_t *list);
+static void evSlideshow(lv_event_t *e);   // TEST 041
+void buildClock();
+void updateClockFace();
+void buildAnalog();
+void updateAnalog();
+void drawDiverClock(bool full = false);
+// clock globals/functions (defined later, used by Settings above them)
+extern bool timeSet;
+extern uint32_t baseMillis;
+extern long baseSecOfDay;
+long nowSecOfDay();
+void ds3231SetHM(int hh, int mm);
+void updateSensorLabel();
+void enterSaver();
+void exitSaver();
+
+// ============================================================
+//  TEST 063: commands for the audio node (address 9)
+//  {bedId, cmd, target, value} - same 4 bytes as the bed boxes
+// ============================================================
+#define NODE_AUDIO      9      // the audio node answers to this bedId
+
+#define CMD_RADIO_PLAY  6      // target = station index
+#define CMD_RADIO_STOP  7
+#define CMD_RADIO_VOL   8      // value 0..21
+#define CMD_RADIO_SLEEP 9      // value = minutes
+
+#define CMD_AC_POWER   10      // value 0 off, 1 on
+#define CMD_AC_TEMP    11      // value = degrees C
+#define CMD_AC_MODE    12      // value 0 cool 1 heat 2 dry 3 fan 4 auto
+#define CMD_AC_FAN     13      // value 0 low 1 med 2 high 3 auto
+#define CMD_AC_SWING   14      // value 0 off, 1 on
+#define CMD_RF         15      // target 0 shade, 1 light
+                               //   shade: value 0 stop, 1 up, 2 down
+                               //   light: value 0 off,  1 on
+
+#define AC_TEMP_MIN    16
+#define AC_TEMP_MAX    30
+// A shutter takes 20-30 s to travel. If the panel still thinks it is
+// moving after this, it gives up - otherwise a shade that reached its
+// limit switch leaves the next press sending STOP instead of UP.
+#define SHADE_TIMEOUT_MS 45000UL
+// TEST 064: how long the shade takes to travel end to end. The tile
+// animates over this, then settles into the opposite state.
+#define SHADE_TRAVEL_MS  20000UL
+#define AC_LONG_PRESS_MS  3000     // hold this long to open the AC screen
+// TEST 071: the lamp does not animate. Two fixed colours, applied
+// once when it is pressed. Nothing repaints on a timer.
+#define LAMP_COL_OFF  0x9098A0     // grey, unlit
+#define LAMP_COL_ON   0xE8A030     // warm amber, lit
+
+// TEST 067: the 3 x 2 grid. 800x480: six 200 px tiles, 22 px apart
+// across and 16 px down, leaving 64 px of status strip at the top.
+#define TILE_SZ    200
+#define TILE_GAPX   22
+#define TILE_GAPY   16
+// TEST 080: how far the home tiles are pulled toward black, 0..255.
+// 0 is the original artwork, 255 is a black square. 110 takes the glare
+// off the white bed without making the icons hard to recognise.
+#define TILE_DIM_OPA 110
+#define TILE_X0     78
+#define TILE_Y0     64
+
+// AC state - what the panel last COMMANDED. This device does not
+// report its target back, so this is the only truth the panel has.
+bool acPower = false;
+int  acTemp  = 24;
+int  acMode  = 0;              // cool
+int  acFan   = 3;              // auto
+bool acSwing = false;
+
+// Shade state - also command-only, there is no feedback at all
+int      shadeMoving = 0;      // 0 stopped, 1 going up, 2 going down
+uint32_t shadeStartMs = 0;
+bool     lightOn = false;
+
+lv_obj_t *acLblTemp = NULL, *acLblRoom = NULL, *acLblPower = NULL;
+lv_obj_t *acModeBtn[5] = {NULL}, *acFanBtn[4] = {NULL}, *acSwingBtn = NULL;
+lv_obj_t *shadeUpBtn = NULL, *shadeDownBtn = NULL, *shadeLbl = NULL;
+lv_obj_t *lightBtn = NULL, *lightLbl = NULL;
+lv_obj_t *scrRoom = NULL;
+
+// TEST 064: home tiles that show state
+// TEST 067: the tiles are photographs now. The label and drawn-window
+// objects that TEST 064 used are gone.
+lv_obj_t *tileLamp = NULL, *tileLampImg = NULL;
+lv_obj_t *tileShade = NULL;
+lv_obj_t *tileAC = NULL;
+lv_obj_t *tileACImg = NULL, *tileShadeImg = NULL;
+lv_obj_t *tileBed = NULL, *tileBedImg = NULL;
+lv_obj_t *tileRadio = NULL, *tileRadioImg = NULL;
+bool radioPlaying = false;      // TEST 067: lights the radio dial
+int  radioStation = -1;         // which tile is lit
+int  radioVolume  = 12;         // 0..21, the audio node's own scale
+lv_obj_t *radioNowLbl = NULL, *radioVolLbl = NULL;
+lv_obj_t *radioBtn[9] = { NULL };
+
+// TEST 069: the stations. Kan 88 and Kan Gimel are real - the URLs
+// were pulled from the data-player-hls-src attribute in kan.org.il
+// page source, and the colours are Kan's own brand colours.
+struct RadioStation { const char *name; uint32_t colour; };
+const RadioStation RADIO[8] = {
+  { "Kan 88",      0x8C24FF },
+  { "Kan Gimel",   0xFF931E },
+  { "Galgalatz",   0x2C58A8 },
+  { "Eco 99",      0x2E8A5C },
+  { "Reshet Bet",  0x5F6673 },
+  { "Kol HaMusica",0x7A5BB5 },
+  { "Groove Salad",0x1D7A94 },
+  { "Drone Zone",  0xA04F7E },
+};
+
+// shade position 0 = fully up (window clear), 1000 = fully down
+int      shadePos = 0;
+// TEST 068: shadeFrom/shadeTo are gone with the animation.
+uint32_t shadeMoveStart = 0;
+
+// TEST 071: no fade state left - the lamp has two colours and no
+// animation, so nothing needs remembering between frames.
+uint32_t acPressMs = 0;
+bool     acLongFired = false;
+
+// ============================================================
+//  UART protocol out
+// ============================================================
+void sendMsg(uint8_t bed, uint8_t cmd, uint8_t target, uint8_t value) {
+  uint8_t m[4] = { bed, cmd, target, value };
+  Serial1.write(m, 4);
+  Serial.printf("UART TX -> bed=%d cmd=%d target=%d value=%d\n", bed, cmd, target, value);
+}
+
+// ============================================================
+//  Backlight
+// ============================================================
+void setupBacklight() {
+  ledcSetup(BL_CH, BL_FREQ, BL_RES);
+  ledcAttachPin(GFX_BL, BL_CH);
+  curDuty = 255; targetDuty = 255;
+  ledcWrite(BL_CH, 255);
+}
+// TEST 080: the About tab, rebuilt on demand so the light reading is live.
+// Kept as its own function because it is called from two places: once when
+// the tab is built, and twice a second from the main loop.
+void refreshAbout() {
+  if (!lblAbout || !lv_obj_is_valid(lblAbout)) return;
+  char info[320];
+  int pct = (int)(curDuty * 100.0f / 255.0f + 0.5f);
+  char luxTxt[32];
+  if (haveBH1750 && luxOK) snprintf(luxTxt,sizeof(luxTxt),"%.1f lux", gLux);
+  else                     snprintf(luxTxt,sizeof(luxTxt),"-- no reading --");
+  snprintf(info,sizeof(info),
+    "BG BEDROOM\nTEST %03d\n\n"
+    "Light    : %s\n"
+    "Temp/Hum : %s\n"
+    "Pressure : %s\n"
+    "RTC      : %s\n"
+    "Touch    : GT911\n\n"
+    "now: %.1f C   %.0f %%   %.0f hPa\n\n"
+    "LIGHT NOW : %s\n"
+    "BACKLIGHT : %d %%   (floor %d, night %d)",
+    TEST_NUMBER,
+    haveBH1750 ? "BH1750 ok" : "absent",
+    haveSHT31  ? "SHT31 ok"  : "absent",
+    haveBME280 ? (isBME ? "BME280 ok" : "BMP280 ok") : "absent",
+    haveDS3231 ? "DS3231 ok" : "none (manual)",
+    gTemp, gHum, gPress,
+    luxTxt, pct, brightFloor, saverFloor);
+  lv_label_set_text(lblAbout,info);
+}
+
+void computeTargetFromLux() {
+  // TEST 080: which floor and ceiling apply depends on the state. The
+  // screensaver is the one that sits next to a sleeping head, so it gets
+  // its own pair of numbers and never borrows the daytime ones.
+  bool night   = (state == ST_SAVER);
+  int  floorPct = night ? saverFloor : brightFloor;
+  int  ceilPct  = night ? SAVER_CEIL : 100;
+  if (floorPct > ceilPct) floorPct = ceilPct;
+
+  if (!haveBH1750 || !luxOK) {
+    // No light sensor reading. Fall back to the FLOOR, not to full
+    // brightness - a failed sensor must never light the room at 3 am.
+    targetDuty = floorPct * 255.0f / 100.0f;
+    return;
+  }
+  float l = constrain(gLux, LUX_FLOOR, LUX_CEIL);
+  float f = (logf(l + 1) - logf(LUX_FLOOR + 1)) /
+            (logf(LUX_CEIL + 1) - logf(LUX_FLOOR + 1));
+  int pct = floorPct + (int)((ceilPct - floorPct) * f);
+  targetDuty = pct * 255.0f / 100.0f;
+}
+void easeBacklight() {
+  curDuty += (targetDuty - curDuty) * 0.15f;
+  curDuty = constrain(curDuty, 0.0f, 255.0f);
+  ledcWrite(BL_CH, (int)(curDuty + 0.5f));
+}
+
+// ============================================================
+//  JPEG / photos
+// ============================================================
+
+// TEST 081: the boot photograph, straight from flash to the panel.
+// Same route the screensaver dial already uses: JPEGDEC needs a
+// writable pointer, so the bytes are copied out of flash to heap
+// first, decoded straight to the screen, and the heap given back.
+// Nothing stays resident - this runs once and is never touched again.
+bool showBootPhoto() {
+#if PANEL_ID == 2
+  const uint8_t *src = BOOT_IRA_JPG;   const uint32_t len = BOOT_IRA_JPG_LEN;
+  const char    *who = "Ira";
+#else
+  const uint8_t *src = BOOT_SHEMI_JPG; const uint32_t len = BOOT_SHEMI_JPG_LEN;
+  const char    *who = "Shemi";
+#endif
+
+  uint8_t *buf = (uint8_t *)malloc(len);
+  if (!buf) {
+    Serial.printf("boot photo: no heap for %u bytes\n", (unsigned)len);
+    return false;
+  }
+  memcpy_P(buf, src, len);
+
+  bool ok = false;
+  if (jpeg.openRAM(buf, len, jpegDrawCb)) {
+    jpeg.setPixelType(RGB565_LITTLE_ENDIAN);
+    ok = jpeg.decode(0, 0, 0);
+    jpeg.close();
+  }
+  free(buf);
+
+  Serial.printf("boot photo: panel %d, %s, %s\n",
+                PANEL_ID, who, ok ? "shown" : "DECODE FAILED");
+  return ok;
+}
+
+int jpegDrawCb(JPEGDRAW *p) {
+  gfx->draw16bitRGBBitmap(p->x, p->y, p->pPixels, p->iWidth, p->iHeight);
+  return 1;
+}
+// TEST 041: memory-safe. A too-big file or a failed allocation used to
+// leave the panel frozen once many photos had been opened. Now the size is
+// checked first, PSRAM is tried then ordinary heap, and the buffer is always
+// freed on every exit path.
+#define MAX_JPG_BYTES 600000UL
+
+bool showPhoto(const char *path) {
+  File f = SD.open(path, FILE_READ);
+  if (!f) { Serial.printf("photo: cannot open %s\n", path); return false; }
+  size_t sz = f.size();
+  if (sz == 0 || sz > MAX_JPG_BYTES) {
+    Serial.printf("photo: %s is %u bytes - skipped (limit %lu)\n",
+                  path, (unsigned)sz, MAX_JPG_BYTES);
+    f.close();
+    return false;
+  }
+  uint8_t *buf = (uint8_t *)ps_malloc(sz);        // PSRAM first
+  if (!buf) buf = (uint8_t *)malloc(sz);          // then ordinary heap
+  if (!buf) {
+    Serial.printf("photo: no memory for %u bytes (free heap %u)\n",
+                  (unsigned)sz, (unsigned)ESP.getFreeHeap());
+    f.close();
+    return false;
+  }
+  size_t got = f.read(buf, sz);
+  f.close();
+  bool ok = false;
+  if (got == sz && jpeg.openRAM(buf, sz, jpegDrawCb)) {
+    jpeg.setPixelType(RGB565_LITTLE_ENDIAN);
+    ok = jpeg.decode(0, 0, 0);
+    jpeg.close();
+  }
+  free(buf);                                      // always freed
+  buf = NULL;
+  return ok;
+}
+// ============================================================
+//  TEST 046: decode the dial once into a PSRAM framebuffer
+// ============================================================
+int jpegToBufCb(JPEGDRAW *p) {
+  if (!dialBuf) return 0;
+  dialBlocks++;                  // TEST 049: prove the decoder reached us
+  for (int row = 0; row < p->iHeight; row++) {
+    int y = p->y + row;
+    if (y < 0 || y >= SCREEN_H) continue;
+    for (int col = 0; col < p->iWidth; col++) {
+      int x = p->x + col;
+      if (x < 0 || x >= SCREEN_W) continue;
+      dialBuf[(size_t)y * SCREEN_W + x] = p->pPixels[row * p->iWidth + col];
+    }
+  }
+  return 1;
+}
+
+bool cacheDial() {
+  dialCached = false;
+  dialBlocks = 0;
+
+  if (!dialBuf)
+    dialBuf = (uint16_t *)ps_malloc((size_t)SCREEN_W * SCREEN_H * sizeof(uint16_t));
+  if (!dialBuf) {
+    snprintf(dialStatus, sizeof(dialStatus), "dial: no PSRAM for the 768 KB buffer");
+    Serial.println(dialStatus); return false;
+  }
+  memset(dialBuf, 0, (size_t)SCREEN_W * SCREEN_H * sizeof(uint16_t));
+
+  // TEST 053: the dial is compiled into the firmware. JPEGDEC wants a
+  // writable pointer, so copy the 17 KB out of flash into heap first.
+  uint8_t *srcbuf = (uint8_t *)malloc(DIAL_JPG_LEN);
+  if (!srcbuf) {
+    snprintf(dialStatus, sizeof(dialStatus), "dial: no heap for %d bytes", DIAL_JPG_LEN);
+    Serial.println(dialStatus); return false;
+  }
+  memcpy_P(srcbuf, DIAL_JPG, DIAL_JPG_LEN);
+
+  bool ok = false;
+  if (jpeg.openRAM(srcbuf, DIAL_JPG_LEN, jpegToBufCb)) {
+    jpeg.setPixelType(RGB565_LITTLE_ENDIAN);
+    ok = jpeg.decode(0, 0, 0);
+    jpeg.close();
+  }
+  free(srcbuf);
+
+  // TEST 066: dim the whole dial once, here, rather than every frame.
+  if (ok && dialBlocks > 0 && SAVER_DIM < 100) {
+    const uint32_t f = SAVER_DIM;
+    for (size_t i = 0; i < (size_t)SCREEN_W * SCREEN_H; i++) {
+      uint16_t p = dialBuf[i];
+      uint32_t r = (p >> 11) & 0x1F, g = (p >> 5) & 0x3F, b = p & 0x1F;
+      r = r * f / 100; g = g * f / 100; b = b * f / 100;
+      dialBuf[i] = (uint16_t)((r << 11) | (g << 5) | b);
+    }
+  }
+
+  dialCached = ok && (dialBlocks > 0);
+  if (dialCached)
+    snprintf(dialStatus, sizeof(dialStatus), "dial: flash ok, %d bytes, %d blocks",
+             DIAL_JPG_LEN, dialBlocks);
+  else if (ok)
+    snprintf(dialStatus, sizeof(dialStatus), "dial: decoded but 0 blocks written");
+  else
+    snprintf(dialStatus, sizeof(dialStatus), "dial: flash decode FAILED");
+  Serial.println(dialStatus);
+  return dialCached;
+}
+
+// ============================================================
+//  TEST 054: INMP441 microphone
+// ============================================================
+static int32_t micBuf[MIC_FRAMES];
+
+bool micBegin() {
+#if !ENABLE_MIC
+  Serial.println("mic: disabled");
+  return false;
+#else
+  if (ENABLE_SD) {
+    Serial.println("mic: REFUSING to start - ENABLE_SD is 1 and shares GPIO 11/12/13");
+    return false;
+  }
+
+  i2s_config_t cfg;
+  memset(&cfg, 0, sizeof(cfg));
+  cfg.mode                 = (i2s_mode_t)(I2S_MODE_MASTER | I2S_MODE_RX);
+  cfg.sample_rate          = MIC_SAMPLE_RATE;
+  cfg.bits_per_sample      = I2S_BITS_PER_SAMPLE_32BIT;   // INMP441 is 24-bit in 32-bit slots
+  cfg.channel_format       = I2S_CHANNEL_FMT_ONLY_LEFT;   // L/R tied to GND
+  cfg.communication_format = I2S_COMM_FORMAT_STAND_I2S;
+  cfg.intr_alloc_flags     = ESP_INTR_FLAG_LEVEL1;
+  cfg.dma_buf_count        = 4;
+  cfg.dma_buf_len          = MIC_FRAMES;
+  cfg.use_apll             = false;
+  cfg.tx_desc_auto_clear   = false;
+  cfg.fixed_mclk           = 0;
+
+  esp_err_t err = i2s_driver_install(MIC_PORT, &cfg, 0, NULL);
+  if (err != ESP_OK) {
+    Serial.printf("mic: i2s_driver_install failed (%d)\n", (int)err);
+    return false;
+  }
+
+  // Every field assigned. mck_io_num is FIRST in this struct and a
+  // designated initialiser that omits it silently selects GPIO0.
+  i2s_pin_config_t pins;
+  pins.mck_io_num   = I2S_PIN_NO_CHANGE;
+  pins.bck_io_num   = MIC_BCK_PIN;
+  pins.ws_io_num    = MIC_WS_PIN;
+  pins.data_out_num = I2S_PIN_NO_CHANGE;
+  pins.data_in_num  = MIC_DIN_PIN;
+
+  err = i2s_set_pin(MIC_PORT, &pins);
+  if (err != ESP_OK) {
+    Serial.printf("mic: i2s_set_pin failed (%d)\n", (int)err);
+    i2s_driver_uninstall(MIC_PORT);
+    return false;
+  }
+
+  i2s_zero_dma_buffer(MIC_PORT);
+  micReady = true;
+  Serial.printf("mic: INMP441 ready - %d Hz, 32-bit, DIN=%d BCK=%d WS=%d\n",
+                MIC_SAMPLE_RATE, MIC_DIN_PIN, MIC_BCK_PIN, MIC_WS_PIN);
+  return true;
+#endif
+}
+
+// Non-blocking: returns false if no full buffer was ready this tick.
+bool micRead() {
+  if (!micReady) return false;
+
+  size_t got = 0;
+  // 20 ms timeout: at 16 kHz a 256-frame buffer fills in 16 ms, so this
+  // usually returns immediately and never stalls the UI.
+  esp_err_t err = i2s_read(MIC_PORT, (void *)micBuf, sizeof(micBuf), &got,
+                           20 / portTICK_PERIOD_MS);
+  if (err != ESP_OK || got < sizeof(int32_t)) return false;
+
+  size_t n = got / sizeof(int32_t);
+  micSamples = n;                 // TEST 056: uttProcess appends exactly this many
+  double sumsq = 0.0;
+  int32_t peak = 0;
+  for (size_t i = 0; i < n; i++) {
+    // INMP441 puts 24 bits left-justified in a 32-bit slot. Shift down
+    // to a signed 16-bit range so the numbers are readable.
+    int32_t s = micBuf[i] >> 14;
+    if (s >  32767) s =  32767;
+    if (s < -32768) s = -32768;
+    int32_t a = (s < 0) ? -s : s;
+    if (a > peak) peak = a;
+    sumsq += (double)s * (double)s;
+  }
+  micRms  = (float)(sqrt(sumsq / (double)n) / 32768.0);
+  micPeak = (float)peak / 32768.0f;
+  micReads++;
+  return true;
+}
+
+// ============================================================
+//  TEST 056: find a word in the stream
+//  Called once per captured buffer, after micRead() has filled
+//  micBuf and updated micRms / micPeak.
+// ============================================================
+// ============================================================
+//  TEST 058: MFCC front end
+//  Radix-2 FFT validated against numpy before being written here
+//  (max error 3e-13 on 512 random points).
+// ============================================================
+static void fftRadix2(float *re, float *im, int n) {
+  // bit reversal
+  int j = 0;
+  for (int i = 1; i < n; i++) {
+    int bit = n >> 1;
+    for (; j & bit; bit >>= 1) j ^= bit;
+    j |= bit;
+    if (i < j) {
+      float t = re[i]; re[i] = re[j]; re[j] = t;
+      t = im[i]; im[i] = im[j]; im[j] = t;
+    }
+  }
+  for (int len = 2; len <= n; len <<= 1) {
+    float ang = -2.0f * (float)M_PI / (float)len;
+    float wr = cosf(ang), wi = sinf(ang);
+    for (int i = 0; i < n; i += len) {
+      float cr = 1.0f, ci = 0.0f;
+      for (int k = 0; k < len / 2; k++) {
+        float ur = re[i + k],           ui = im[i + k];
+        float xr = re[i + k + len / 2], xi = im[i + k + len / 2];
+        float vr = xr * cr - xi * ci;
+        float vi = xr * ci + xi * cr;
+        re[i + k] = ur + vr;  im[i + k] = ui + vi;
+        re[i + k + len / 2] = ur - vr;  im[i + k + len / 2] = ui - vi;
+        float ncr = cr * wr - ci * wi;
+        ci = cr * wi + ci * wr;
+        cr = ncr;
+      }
+    }
+  }
+}
+
+static inline float hz2mel(float f) { return 2595.0f * log10f(1.0f + f / 700.0f); }
+static inline float mel2hz(float m) { return 700.0f * (powf(10.0f, m / 2595.0f) - 1.0f); }
+
+void dspInit() {
+  for (int i = 0; i < MFCC_FRAME; i++)
+    hamWin[i] = 0.54f - 0.46f * cosf(2.0f * (float)M_PI * i / (MFCC_FRAME - 1));
+
+  float lo = hz2mel(MFCC_FMIN), hi = hz2mel(MFCC_FMAX);
+  for (int i = 0; i < MFCC_NMEL + 2; i++) {
+    float hz = mel2hz(lo + (hi - lo) * i / (MFCC_NMEL + 1));
+    melBin[i] = (int)floorf((MFCC_NFFT + 1) * hz / (float)MIC_SAMPLE_RATE);
+    if (melBin[i] > MFCC_NFFT / 2) melBin[i] = MFCC_NFFT / 2;
+  }
+
+  for (int c = 0; c < MFCC_NCEP; c++)
+    for (int m = 0; m < MFCC_NMEL; m++)
+      dctTab[c][m] = cosf((float)M_PI * (c + 1) * (m + 0.5f) / MFCC_NMEL);
+
+  size_t fbytes = (size_t)MFCC_MAX_FRAMES * MFCC_NCEP * sizeof(float);
+  mfccCur = (float *)ps_malloc(fbytes);
+  bool refsOk = true;
+  for (int i = 0; i < REF_SLOTS; i++) {
+    mfccRefs[i] = (float *)ps_malloc(fbytes);
+    if (!mfccRefs[i]) refsOk = false;
+  }
+  dtwA = (float *)ps_malloc((size_t)(MFCC_MAX_FRAMES + 1) * sizeof(float));
+  dtwB = (float *)ps_malloc((size_t)(MFCC_MAX_FRAMES + 1) * sizeof(float));
+
+  dspReady = mfccCur && refsOk && dtwA && dtwB;
+  Serial.printf("dsp: %s  (%u bytes of features, %d reference slots)\n",
+                dspReady ? "ready" : "ALLOCATION FAILED",
+                (unsigned)((REF_SLOTS + 1) * fbytes), REF_SLOTS);
+}
+
+// Returns the number of frames written into out[].
+int mfccExtract(const int16_t *sig, size_t len, float *out) {
+  if (!dspReady || len < MFCC_FRAME) return 0;
+
+  int frames = 0;
+  for (size_t start = 0;
+       start + MFCC_FRAME <= len && frames < MFCC_MAX_FRAMES;
+       start += MFCC_HOP) {
+
+    for (int i = 0; i < MFCC_NFFT; i++) { fftRe[i] = 0.0f; fftIm[i] = 0.0f; }
+    // pre-emphasis inside the window, then Hamming
+    for (int i = 0; i < MFCC_FRAME; i++) {
+      size_t k = start + i;
+      float prev = (k > 0) ? (float)sig[k - 1] : 0.0f;
+      fftRe[i] = ((float)sig[k] - 0.97f * prev) * hamWin[i];
+    }
+    fftRadix2(fftRe, fftIm, MFCC_NFFT);
+
+    float *dst = out + (size_t)frames * MFCC_NCEP;
+    float mel[MFCC_NMEL];
+    for (int m = 1; m <= MFCC_NMEL; m++) {
+      int l = melBin[m - 1], c = melBin[m], r = melBin[m + 1];
+      float s = 0.0f;
+      for (int k = l; k < c; k++) {
+        float p = (fftRe[k] * fftRe[k] + fftIm[k] * fftIm[k]) / MFCC_NFFT;
+        if (c > l) s += p * (float)(k - l) / (float)(c - l);
+      }
+      for (int k = c; k < r; k++) {
+        float p = (fftRe[k] * fftRe[k] + fftIm[k] * fftIm[k]) / MFCC_NFFT;
+        if (r > c) s += p * (float)(r - k) / (float)(r - c);
+      }
+      mel[m - 1] = logf(s + 1e-10f);
+    }
+    for (int c = 0; c < MFCC_NCEP; c++) {
+      float acc = 0.0f;
+      for (int m = 0; m < MFCC_NMEL; m++) acc += dctTab[c][m] * mel[m];
+      dst[c] = acc;
+    }
+    frames++;
+  }
+
+  // cepstral mean normalisation: removes the constant colour of the
+  // microphone and the room, and most of the effect of loudness
+  for (int c = 0; c < MFCC_NCEP; c++) {
+    float mean = 0.0f;
+    for (int f = 0; f < frames; f++) mean += out[(size_t)f * MFCC_NCEP + c];
+    mean /= (float)frames;
+    for (int f = 0; f < frames; f++) out[(size_t)f * MFCC_NCEP + c] -= mean;
+  }
+  return frames;
+}
+
+// Dynamic time warping, normalised by path length so long and short
+// words are comparable.
+float dtwDistance(const float *A, int n, const float *B, int m) {
+  if (!dspReady || n < 2 || m < 2) return -1.0f;
+  const float INF = 3.4e38f;
+  float *prev = dtwA, *cur = dtwB;
+  for (int j = 0; j <= m; j++) prev[j] = INF;
+  prev[0] = 0.0f;
+
+  for (int i = 1; i <= n; i++) {
+    cur[0] = INF;
+    const float *a = A + (size_t)(i - 1) * MFCC_NCEP;
+    for (int j = 1; j <= m; j++) {
+      const float *b = B + (size_t)(j - 1) * MFCC_NCEP;
+      float d = 0.0f;
+      for (int c = 0; c < MFCC_NCEP; c++) { float e = a[c] - b[c]; d += e * e; }
+      d = sqrtf(d);
+      float best = prev[j];
+      if (cur[j - 1] < best) best = cur[j - 1];
+      if (prev[j - 1] < best) best = prev[j - 1];
+      cur[j] = d + best;
+    }
+    float *t = prev; prev = cur; cur = t;
+  }
+  return prev[m] / (float)(n + m);
+}
+
+// TEST 059: store the last word as a reference. Slots cycle, so pressing
+// Learn four times keeps the three most recent.
+void learnReference() {
+  if (!dspReady || curFrames <= 0) {
+    Serial.println("learn: say the word first");
+    return;
+  }
+  memcpy(mfccRefs[refNext], mfccCur, (size_t)curFrames * MFCC_NCEP * sizeof(float));
+  refFrames[refNext] = curFrames;
+  refMs[refNext]     = lastVoiceMs;
+  refNext = (refNext + 1) % REF_SLOTS;
+  if (refCount < REF_SLOTS) refCount++;
+  Serial.printf("learn: stored %d frames (%u ms), %d/%d slots filled\n",
+                curFrames, (unsigned)lastVoiceMs, refCount, REF_SLOTS);
+  if (learnLbl) lv_label_set_text_fmt(learnLbl, "Learn %d/%d", refCount, REF_SLOTS);
+}
+
+void clearReferences() {
+  for (int i = 0; i < REF_SLOTS; i++) { refFrames[i] = 0; refMs[i] = 0; }
+  refNext = 0; refCount = 0;
+  Serial.println("learn: references cleared");
+  if (learnLbl) lv_label_set_text_fmt(learnLbl, "Learn 0/%d", REF_SLOTS);
+}
+
+void uttProcess() {
+  if (!uttBuf || !preBuf) return;
+
+  const uint32_t now = millis();
+  const float startTh = fmaxf(micFloor * UTT_START_MULT, UTT_ABS_FLOOR);
+  const float stopTh  = fmaxf(micFloor * UTT_STOP_MULT,  UTT_ABS_FLOOR * 0.7f);
+
+  // ---- TEST 057: the ring runs ALWAYS, speaking or not ----
+  for (size_t i = 0; i < micSamples; i++) {
+    int32_t s = micBuf[i] >> 14;
+    if (s >  32767) s =  32767;
+    if (s < -32768) s = -32768;
+    preBuf[preHead] = (int16_t)s;
+    preHead = (preHead + 1) % PRE_ROLL_SAMPLES;
+    if (preCount < PRE_ROLL_SAMPLES) preCount++;
+  }
+
+  if (!uttActive) {
+    micFloor = micFloor * 0.98f + micRms * 0.02f;   // track the room while quiet
+    if (micRms <= startTh) return;
+
+    // Speech. Start the recording with the pre-roll, oldest sample first.
+    uttActive   = true;
+    uttStartMs  = now;
+    uttQuietMs  = 0;
+    uttFillAtQuiet = 0;
+    uttLastPeak = micPeak;
+    uttFill     = 0;
+
+    size_t start = (preHead + PRE_ROLL_SAMPLES - preCount) % PRE_ROLL_SAMPLES;
+    for (size_t i = 0; i < preCount && uttFill < UTT_BUF_SAMPLES; i++) {
+      uttBuf[uttFill++] = preBuf[(start + i) % PRE_ROLL_SAMPLES];
+    }
+    // the pre-roll already contains this buffer's samples - do not add them twice
+  } else {
+    for (size_t i = 0; i < micSamples && uttFill < UTT_BUF_SAMPLES; i++) {
+      int32_t s = micBuf[i] >> 14;
+      if (s >  32767) s =  32767;
+      if (s < -32768) s = -32768;
+      uttBuf[uttFill++] = (int16_t)s;
+    }
+    if (micPeak > uttLastPeak) uttLastPeak = micPeak;
+  }
+
+  bool tooLong = (uttFill >= UTT_BUF_SAMPLES) || ((now - uttStartMs) > UTT_MAX_MS);
+
+  if (micRms < stopTh) {
+    if (uttQuietMs == 0) { uttQuietMs = now; uttFillAtQuiet = uttFill; }
+  } else {
+    uttQuietMs = 0;
+  }
+  bool ended = (uttQuietMs && (now - uttQuietMs) >= UTT_HANG_MS);
+
+  if (!ended && !tooLong) return;
+
+  uttActive = false;
+  // trim the hang time, but never below the pre-roll we deliberately kept
+  if (ended && uttFillAtQuiet > PRE_ROLL_SAMPLES && uttFillAtQuiet < uttFill)
+    uttFill = uttFillAtQuiet;
+
+  uint32_t totalMs = (uint32_t)((uint64_t)uttFill * 1000ULL / MIC_SAMPLE_RATE);
+  uint32_t voiceMs = (totalMs > PRE_ROLL_MS) ? (totalMs - PRE_ROLL_MS) : 0;
+
+  if (voiceMs < UTT_MIN_MS) {
+    Serial.printf("utt: rejected, %u ms of voice is too short\n", (unsigned)voiceMs);
+    return;
+  }
+
+  uttLen    = uttFill;
+  uttLastMs = totalMs;
+  uttCount++;
+  uttHist[uttHistN % UTT_HISTORY] = voiceMs;
+  uttHistN++;
+
+  Serial.printf("utt #%u: voice %u ms (+%d pre-roll = %u total), %u samples, "
+                "peak %.3f, floor %.4f%s\n",
+                (unsigned)uttCount, (unsigned)voiceMs, PRE_ROLL_MS,
+                (unsigned)totalMs, (unsigned)uttLen, uttLastPeak, micFloor,
+                tooLong ? "  (hit the limit)" : "");
+  lastVoiceMs = voiceMs;
+
+  // ---- TEST 058: features, and a distance if a reference exists ----
+  uint32_t t0 = millis();
+  curFrames = mfccExtract(uttBuf, uttLen, mfccCur);
+  uint32_t tMfcc = millis() - t0;
+  lastDist = -1.0f;
+
+  // TEST 061: duration gate. Cheaper than DTW and it removes the
+  // obviously-wrong lengths - sentences, coughs - before the maths.
+  bool durOk = true;
+  if (refCount > 0) {
+    uint32_t sum = 0; int n = 0;
+    for (int i = 0; i < REF_SLOTS; i++) if (refMs[i]) { sum += refMs[i]; n++; }
+    if (n > 0) {
+      float ratio = (float)voiceMs / ((float)sum / (float)n);
+      if (ratio < WAKE_DUR_MIN || ratio > WAKE_DUR_MAX) {
+        durOk = false;
+        Serial.printf("     mfcc %d frames (%u ms), length %.2fx of learned - "
+                      "rejected before DTW\n",
+                      curFrames, (unsigned)tMfcc, ratio);
+      }
+    }
+  }
+
+  if (curFrames > 0 && refCount > 0 && durOk) {
+    t0 = millis();
+    float best = -1.0f; int bestSlot = -1;
+    char per[80]; int off = 0;
+    for (int i = 0; i < REF_SLOTS; i++) {
+      if (refFrames[i] <= 0) continue;
+      float d = dtwDistance(mfccCur, curFrames, mfccRefs[i], refFrames[i]);
+      if (d >= 0.0f && (best < 0.0f || d < best)) { best = d; bestSlot = i; }
+      if (off < (int)sizeof(per) - 12)
+        off += snprintf(per + off, sizeof(per) - off, " %.2f", d);
+    }
+    lastDist = best;
+    bool hit = (best >= 0.0f && best < wakeThreshold);
+    Serial.printf("     mfcc %d frames (%u ms), dtw%s -> best %.3f (slot %d, %u ms)  %s\n",
+                  curFrames, (unsigned)tMfcc, per, best, bestSlot,
+                  (unsigned)(millis() - t0),
+                  hit ? "*** WAKE WORD ***" : "(no match)");
+    if (hit) {
+      wakeCount++;
+      Serial.printf("WAKE #%u  distance %.3f  threshold %.2f\n",
+                    (unsigned)wakeCount, best, wakeThreshold);
+      wakeShownMs = millis();
+      if (wakeBanner) lv_obj_clear_flag(wakeBanner, LV_OBJ_FLAG_HIDDEN);
+      if (state == ST_SAVER) exitSaver();     // wake the screen
+    }
+  } else if (!durOk) {
+    /* already reported */
+  } else {
+    Serial.printf("     mfcc %d frames (%u ms), no reference yet - press Learn\n",
+                  curFrames, (unsigned)tMfcc);
+  }
+
+  if (uttLbl) {
+    if (lastDist >= 0.0f)
+      lv_label_set_text_fmt(uttLbl, "word #%u  %u ms   d=%d.%02d",
+                            (unsigned)uttCount, (unsigned)voiceMs,
+                            (int)lastDist, (int)((lastDist - (int)lastDist) * 100));
+    else
+      lv_label_set_text_fmt(uttLbl, "word #%u  %u ms", (unsigned)uttCount,
+                            (unsigned)voiceMs);
+  }
+}
+
+// Print the last utterance as base64 so it can be copied off the board.
+void uttDump() {
+  if (!uttBuf || uttLen == 0) { Serial.println("utt: nothing captured yet"); return; }
+
+  static const char *B64 =
+      "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+  const uint8_t *p = (const uint8_t *)uttBuf;
+  size_t bytes = uttLen * sizeof(int16_t);
+
+  Serial.printf("utt-dump begin  samples=%u  rate=%d  bits=16  le=1\n",
+                (unsigned)uttLen, MIC_SAMPLE_RATE);
+  size_t i = 0, col = 0;
+  while (i < bytes) {
+    uint32_t v = (uint32_t)p[i] << 16;
+    int have = 1;
+    if (i + 1 < bytes) { v |= (uint32_t)p[i+1] << 8; have = 2; }
+    if (i + 2 < bytes) { v |= (uint32_t)p[i+2];      have = 3; }
+    char q[4];
+    q[0] = B64[(v >> 18) & 0x3F];
+    q[1] = B64[(v >> 12) & 0x3F];
+    q[2] = (have > 1) ? B64[(v >> 6) & 0x3F] : '=';
+    q[3] = (have > 2) ? B64[v & 0x3F]        : '=';
+    Serial.write(q, 4);
+    i += 3;
+    if ((col += 4) >= 76) { Serial.println(); col = 0; }
+  }
+  if (col) Serial.println();
+  Serial.println("utt-dump end");
+}
+
+void scanPhotos() {
+  photoCount = 0;
+  File dir = SD.open(PHOTO_DIR);
+  if (!dir || !dir.isDirectory()) { Serial.println("no /photos dir"); return; }
+  File e;
+  while ((e = dir.openNextFile()) && photoCount < MAX_PHOTOS) {
+    if (!e.isDirectory()) {
+      String n = e.name(); String low = n; low.toLowerCase();
+      if (low.endsWith(".jpg") || low.endsWith(".jpeg")) {
+        if (!n.startsWith("/")) n = String(PHOTO_DIR) + "/" + n;
+        n.toCharArray(photoList[photoCount], 64); photoCount++;
+      }
+    }
+    e.close();
+  }
+  dir.close();
+  Serial.printf("screensaver: %d photos\n", photoCount);
+}
+void showRandomPhoto() {
+  if (photoCount == 0) return;
+  int idx = random(0, photoCount);
+  if (photoCount > 1) while (idx == lastPhotoIdx) idx = random(0, photoCount);
+  lastPhotoIdx = idx;
+  showPhoto(photoList[idx]); photoShownMs = millis();
+}
+
+// ============================================================
+//  GT911
+// ============================================================
+bool gt911WriteReg(uint16_t reg, uint8_t val) {
+  Wire.beginTransmission(gt911Addr);
+  Wire.write(reg >> 8); Wire.write(reg & 0xFF); Wire.write(val);
+  return Wire.endTransmission() == 0;
+}
+int gt911ReadRegs(uint16_t reg, uint8_t *buf, int len) {
+  Wire.beginTransmission(gt911Addr);
+  Wire.write(reg >> 8); Wire.write(reg & 0xFF);
+  if (Wire.endTransmission(false) != 0) return -1;
+  int n = Wire.requestFrom((int)gt911Addr, len);
+  for (int i = 0; i < n; i++) buf[i] = Wire.read();
+  return n;
+}
+bool gt911Probe() {
+  const uint8_t a[2] = { GT911_ADDR1, GT911_ADDR2 };
+  for (int i = 0; i < 2; i++) {
+    Wire.beginTransmission(a[i]);
+    if (Wire.endTransmission() == 0) { gt911Addr = a[i];
+      Serial.printf("GT911 at 0x%02X\n", gt911Addr); return true; }
+  }
+  Serial.println("GT911 not found"); return false;
+}
+bool gt911Read(int16_t &x, int16_t &y, bool &touched) {
+  uint8_t st = 0;
+  if (gt911ReadRegs(0x814E, &st, 1) != 1) return false;
+  touched = false;
+  if (st & 0x80) {
+    if ((st & 0x0F) > 0) {
+      uint8_t d[4];
+      if (gt911ReadRegs(0x8150, d, 4) == 4) {
+        int32_t rx = d[0] | (d[1] << 8), ry = d[2] | (d[3] << 8);
+        x = constrain(rx * SCREEN_W / TOUCH_RAW_W, 0, SCREEN_W - 1);
+        y = constrain(ry * SCREEN_H / TOUCH_RAW_H, 0, SCREEN_H - 1);
+        touched = true;
+      }
+    }
+    gt911WriteReg(0x814E, 0);
+  }
+  return true;
+}
+
+// ============================================================
+//  I2C + sensors (BH1750, BME/BMP280)
+// ============================================================
+void i2cScan() {
+  Serial.println("I2C scan:");
+  for (uint8_t a = 1; a < 127; a++) {
+    Wire.beginTransmission(a);
+    if (Wire.endTransmission() == 0) Serial.printf("  0x%02X\n", a);
+  }
+}
+bool bh1750Begin() {
+  Wire.beginTransmission(BH1750_ADDR);
+  if (Wire.endTransmission() != 0) return false;
+  Wire.beginTransmission(BH1750_ADDR);
+  Wire.write(0x10); return Wire.endTransmission() == 0;
+}
+bool bh1750Read(float &lx) {
+  if (Wire.requestFrom(BH1750_ADDR, 2) != 2) return false;
+  uint16_t raw = (Wire.read() << 8) | Wire.read();
+  lx = raw / 1.2f; return true;
+}
+uint8_t bmeReadReg(uint8_t reg) {
+  Wire.beginTransmission(bme280Addr);
+  Wire.write(reg); Wire.endTransmission(false);
+  Wire.requestFrom((int)bme280Addr, 1);
+  return Wire.read();
+}
+void bmeReadRegs(uint8_t reg, uint8_t *buf, int len) {
+  Wire.beginTransmission(bme280Addr);
+  Wire.write(reg); Wire.endTransmission(false);
+  Wire.requestFrom((int)bme280Addr, len);
+  for (int i = 0; i < len; i++) buf[i] = Wire.read();
+}
+void bmeWriteReg(uint8_t reg, uint8_t val) {
+  Wire.beginTransmission(bme280Addr);
+  Wire.write(reg); Wire.write(val); Wire.endTransmission();
+}
+// ============================================================
+//  TEST 062: SHT31 temperature + humidity, raw Wire.
+//  Same approach as the BMP280 driver above - no extra library.
+// ============================================================
+bool sht31Begin() {
+  Wire.beginTransmission(SHT31_ADDR);
+  if (Wire.endTransmission() != 0) return false;
+
+  // soft reset, then leave it in single-shot mode
+  Wire.beginTransmission(SHT31_ADDR);
+  Wire.write(0x30); Wire.write(0xA2);
+  Wire.endTransmission();
+  delay(20);
+  Serial.printf("SHT31 at 0x%02X\n", SHT31_ADDR);
+  return true;
+}
+
+bool sht31Read(float &t, float &h) {
+  // single shot, high repeatability, clock stretching disabled
+  Wire.beginTransmission(SHT31_ADDR);
+  Wire.write(0x24); Wire.write(0x00);
+  if (Wire.endTransmission() != 0) return false;
+  delay(20);                       // 15 ms typical for high repeatability
+
+  if (Wire.requestFrom((uint8_t)SHT31_ADDR, (uint8_t)6) != 6) return false;
+  uint8_t d[6];
+  for (int i = 0; i < 6; i++) d[i] = Wire.read();
+
+  uint16_t rawT = ((uint16_t)d[0] << 8) | d[1];
+  uint16_t rawH = ((uint16_t)d[3] << 8) | d[4];
+  if (rawT == 0xFFFF && rawH == 0xFFFF) return false;
+
+  t = -45.0f + 175.0f * ((float)rawT / 65535.0f);
+  h = 100.0f * ((float)rawH / 65535.0f);
+  if (h < 0.0f)   h = 0.0f;
+  if (h > 100.0f) h = 100.0f;
+  return true;
+}
+
+bool bme280Begin() {
+  const uint8_t addrs[2] = { BME280_ADDR1, BME280_ADDR2 };
+  for (int i = 0; i < 2; i++) {
+    Wire.beginTransmission(addrs[i]);
+    if (Wire.endTransmission() == 0) {
+      bme280Addr = addrs[i];
+      uint8_t id = bmeReadReg(0xD0);
+      if (id == 0x60) isBME = true;
+      else if (id == 0x58) isBME = false;
+      else return false;
+      Serial.printf("%s at 0x%02X\n", isBME ? "BME280" : "BMP280", bme280Addr);
+      bmeWriteReg(0xE0, 0xB6); delay(10);
+      uint8_t c[26];
+      bmeReadRegs(0x88, c, 26);
+      dig_T1 = c[0] | (c[1] << 8);
+      dig_T2 = (int16_t)(c[2] | (c[3] << 8));
+      dig_T3 = (int16_t)(c[4] | (c[5] << 8));
+      dig_P1 = c[6] | (c[7] << 8);
+      dig_P2 = (int16_t)(c[8] | (c[9] << 8));
+      dig_P3 = (int16_t)(c[10] | (c[11] << 8));
+      dig_P4 = (int16_t)(c[12] | (c[13] << 8));
+      dig_P5 = (int16_t)(c[14] | (c[15] << 8));
+      dig_P6 = (int16_t)(c[16] | (c[17] << 8));
+      dig_P7 = (int16_t)(c[18] | (c[19] << 8));
+      dig_P8 = (int16_t)(c[20] | (c[21] << 8));
+      dig_P9 = (int16_t)(c[22] | (c[23] << 8));
+      dig_H1 = c[25];
+      if (isBME) {
+        uint8_t h[7];
+        bmeReadRegs(0xE1, h, 7);
+        dig_H2 = (int16_t)(h[0] | (h[1] << 8));
+        dig_H3 = h[2];
+        dig_H4 = (int16_t)((h[3] << 4) | (h[4] & 0x0F));
+        dig_H5 = (int16_t)(((h[4] >> 4) & 0x0F) | (h[5] << 4));
+        dig_H6 = (int8_t)h[6];
+        bmeWriteReg(0xF2, 0x01);
+      }
+      bmeWriteReg(0xF5, 0xA0);
+      bmeWriteReg(0xF4, 0x57);
+      return true;
+    }
+  }
+  return false;
+}
+bool bme280Read(float &t, float &h, float &p) {
+  uint8_t d[8];
+  bmeReadRegs(0xF7, d, 8);
+  int32_t adc_P = ((int32_t)d[0] << 12) | ((int32_t)d[1] << 4) | (d[2] >> 4);
+  int32_t adc_T = ((int32_t)d[3] << 12) | ((int32_t)d[4] << 4) | (d[5] >> 4);
+  int32_t adc_H = ((int32_t)d[6] << 8) | d[7];
+  int32_t var1 = ((((adc_T >> 3) - ((int32_t)dig_T1 << 1))) * (int32_t)dig_T2) >> 11;
+  int32_t var2 = (((((adc_T >> 4) - (int32_t)dig_T1) * ((adc_T >> 4) - (int32_t)dig_T1)) >> 12) * (int32_t)dig_T3) >> 14;
+  t_fine = var1 + var2;
+  t = (t_fine * 5 + 128) / 256 / 100.0f;
+  int64_t v1 = (int64_t)t_fine - 128000;
+  int64_t v2 = v1 * v1 * (int64_t)dig_P6;
+  v2 = v2 + ((v1 * (int64_t)dig_P5) << 17);
+  v2 = v2 + (((int64_t)dig_P4) << 35);
+  v1 = ((v1 * v1 * (int64_t)dig_P3) >> 8) + ((v1 * (int64_t)dig_P2) << 12);
+  v1 = (((((int64_t)1) << 47) + v1)) * ((int64_t)dig_P1) >> 33;
+  if (v1 == 0) p = 0;
+  else {
+    int64_t pp = 1048576 - adc_P;
+    pp = (((pp << 31) - v2) * 3125) / v1;
+    v1 = (((int64_t)dig_P9) * (pp >> 13) * (pp >> 13)) >> 25;
+    v2 = (((int64_t)dig_P8) * pp) >> 19;
+    pp = ((pp + v1 + v2) >> 8) + (((int64_t)dig_P7) << 4);
+    p = (float)pp / 256.0f / 100.0f;
+  }
+  if (isBME) {
+    int32_t hv = t_fine - 76800;
+    hv = (((((adc_H << 14) - ((int32_t)dig_H4 << 20) - ((int32_t)dig_H5 * hv)) + 16384) >> 15) *
+          (((((((hv * (int32_t)dig_H6) >> 10) * (((hv * (int32_t)dig_H3) >> 11) + 32768)) >> 10) + 2097152) *
+          (int32_t)dig_H2 + 8192) >> 14));
+    hv = hv - (((((hv >> 15) * (hv >> 15)) >> 7) * (int32_t)dig_H1) >> 4);
+    hv = constrain(hv, 0, 419430400);
+    h = (float)(hv >> 12) / 1024.0f;
+  } else h = -1;
+  return true;
+}
+
+// ============================================================
+//  LVGL glue
+// ============================================================
+void lvglFlushCb(lv_disp_drv_t *disp, const lv_area_t *area, lv_color_t *color_p) {
+  int w = area->x2 - area->x1 + 1, h = area->y2 - area->y1 + 1;
+  gfx->draw16bitRGBBitmap(area->x1, area->y1, (uint16_t *)&color_p->full, w, h);
+  lv_disp_flush_ready(disp);
+}
+void lvglTouchCb(lv_indev_drv_t *drv, lv_indev_data_t *data) {
+  int16_t x, y; bool t = false;
+  if (gt911Addr && gt911Read(x, y, t) && t) {
+    data->state = LV_INDEV_STATE_PR;
+    data->point.x = x; data->point.y = y;
+    lastTouchMs = millis();
+  } else data->state = LV_INDEV_STATE_REL;
+}
+
+// ============================================================
+//  UI events
+// ============================================================
+static void evGoMassage(lv_event_t *e) { lv_scr_load(scrMassage); }
+static void evGoRadio(lv_event_t *e)   { lv_scr_load(scrRadio); }
+static void evGoAC(lv_event_t *e)      { lv_scr_load(scrAC); }
+static void evGoHome(lv_event_t *e)    { lv_scr_load(scrHome); }
+lv_obj_t *bedBtn[3];
+const uint32_t BED_COL[3] = { 0x2060D0, 0xC02020, 0x209040 }; // Shemi blue, Ira red, Both green
+const uint32_t BED_DIM[3] = { 0x142848, 0x481414, 0x14380f };
+void refreshBedButtons() {
+  int sel = (curBedId == 1) ? 0 : (curBedId == 2) ? 1 : 2;
+  for (int i = 0; i < 3; i++)
+    lv_obj_set_style_bg_color(bedBtn[i],
+      lv_color_hex(i == sel ? BED_COL[i] : BED_DIM[i]), 0);
+}
+static void evBedSel(lv_event_t *e) {
+  int i = (int)(intptr_t)lv_event_get_user_data(e);
+  curBedId = (i == 0) ? 1 : (i == 1) ? 2 : 0;
+  refreshBedButtons();
+  Serial.printf("bed selector -> %d\n", curBedId);
+}
+void buildBedSelector() {
+  const char *bn[3] = { "Shemi", "Ira", "Both" };
+  for (int i = 0; i < 3; i++) {
+    bedBtn[i] = lv_btn_create(scrMassage);
+    lv_obj_set_size(bedBtn[i], 175, 66);
+    lv_obj_align(bedBtn[i], LV_ALIGN_TOP_RIGHT, -10 - (2 - i) * 185, 8);
+    lv_obj_set_style_radius(bedBtn[i], 14, 0);
+    lv_obj_add_event_cb(bedBtn[i], evBedSel, LV_EVENT_CLICKED, (void *)(intptr_t)i);
+    lv_obj_t *l = lv_label_create(bedBtn[i]);
+    lv_label_set_text(l, bn[i]);
+    lv_obj_set_style_text_font(l, &lv_font_montserrat_28, 0);
+    lv_obj_center(l);
+  }
+  refreshBedButtons();
+}
+static void evZoneSlider(lv_event_t *e) {
+  lv_obj_t *s = lv_event_get_target(e);
+  int zone = (int)(intptr_t)lv_event_get_user_data(e);
+  int v = lv_slider_get_value(s);
+  lv_label_set_text_fmt(lblZoneVal[zone], "%d%%", v);
+  if (lv_event_get_code(e) == LV_EVENT_RELEASED)
+    sendMsg(curBedId, CMD_ZONE, zone, v);
+}
+// TEST 075: twelve tiles. Eleven of them are bed box patterns 0..10.
+// The twelfth, "full", is not a pattern at all - it is simply every
+// motor at once, so it needs nothing new at the bed box end.
+lv_obj_t *patTile[12] = {NULL};
+int activePattern = -1;                 // -1 = none lit
+
+const uint8_t PAT_MAP[12] = { 0, 1, 2, 255, 3, 4, 5, 6, 7, 8, 9, 10 };
+
+const uint32_t PAT_BG_ON[3]  = { 0x0F6E56, 0x534AB7, 0x993C1D };
+const uint32_t PAT_BG_OFF[3] = { 0x0B3D31, 0x2E2870, 0x6B2A14 };
+const uint32_t PAT_TX_ON[3]  = { 0x9FE1CB, 0xCECBF6, 0xF5C4B3 };
+const uint32_t PAT_TX_OFF[3] = { 0x5DCAA5, 0xAFA9EC, 0xF0997B };
+
+void refreshPatTiles() {
+  for (int i = 0; i < 12; i++) {
+    if (!patTile[i]) continue;
+    int row = i / 4;
+    bool on = (i == activePattern);
+    lv_obj_set_style_bg_color(patTile[i],
+      lv_color_hex(on ? PAT_BG_ON[row] : PAT_BG_OFF[row]), 0);
+    lv_obj_set_style_border_width(patTile[i], on ? 3 : 0, 0);
+    lv_obj_set_style_border_color(patTile[i], lv_color_hex(PAT_TX_ON[row]), 0);
+    lv_obj_t *l = lv_obj_get_child(patTile[i], 0);
+    if (l) lv_obj_set_style_text_color(l,
+             lv_color_hex(on ? PAT_TX_ON[row] : PAT_TX_OFF[row]), 0);
+  }
+}
+
+static void evPreset(lv_event_t *e) {
+  int i = (int)(intptr_t)lv_event_get_user_data(e);
+  randomActive = false;                 // the bed box owns randomness now
+  activePattern = i;
+  refreshPatTiles();
+  if (PAT_MAP[i] == 255) sendMsg(curBedId, CMD_ALL, 0, 100);
+  else                   sendMsg(curBedId, CMD_PRESET, PAT_MAP[i], 60);
+  Serial.printf("mode tile %d -> %s\n", i,
+                PAT_MAP[i] == 255 ? "ALL 100" : "preset");
+}
+static void evTimer(lv_event_t *e) {
+  int mins = (int)(intptr_t)lv_event_get_user_data(e);
+  sendMsg(curBedId, CMD_TIMER, 0, mins);
+}
+static void evOff(lv_event_t *e) {
+  randomActive = false;
+  activePattern = -1;
+  refreshPatTiles();
+  sendMsg(curBedId, CMD_OFF, 0, 0);
+  for (int z = 0; z < 4; z++) {
+    lv_slider_set_value(sliderZone[z], 0, LV_ANIM_ON);
+    lv_label_set_text(lblZoneVal[z], "0%");
+  }
+}
+
+// ============================================================
+//  Build screens
+// ============================================================
+// ============================================================
+//  TEST 064: living home tiles
+// ============================================================
+bool massageRunning = false;    // TEST 067: lights the bed tile
+
+void refreshLampTile() {
+  if (!tileLampImg) return;
+  // TEST 071: called only when the tile is pressed, never on a timer.
+  if (lightOn) {
+    lv_obj_set_style_img_recolor(tileLampImg, lv_color_hex(LAMP_COL_ON), 0);
+    lv_obj_set_style_img_recolor_opa(tileLampImg, 100, 0);
+  } else {
+    lv_obj_set_style_img_recolor(tileLampImg, lv_color_hex(LAMP_COL_OFF), 0);
+    lv_obj_set_style_img_recolor_opa(tileLampImg, 205, 0);
+  }
+}
+
+void refreshShadeTile() {
+  if (!tileShadeImg) return;
+  // TEST 068: no animation at all. The picture switches the moment it
+  // is pressed. The real shutter still takes its 20 seconds and the
+  // stop command still works; the tile simply does not perform.
+  lv_img_set_src(tileShadeImg,
+                 shadePos > 500 ? &img_shade_closed : &img_shade_open);
+}
+
+void refreshACTile() {
+  if (!tileACImg) return;
+  lv_img_set_src(tileACImg, acPower ? &img_ac_on : &img_ac_off);
+}
+
+void refreshBedTile() {
+  if (!tileBedImg) return;
+  lv_img_set_src(tileBedImg, massageRunning ? &img_bed_on : &img_bed_off);
+}
+
+void refreshRadioTile() {
+  if (!tileRadioImg) return;
+  lv_img_set_src(tileRadioImg, radioPlaying ? &img_radio_on : &img_radio_off);
+}
+
+// ---- light ----
+static void evTileLamp(lv_event_t *e) {
+  lightOn = !lightOn;
+  sendMsg(NODE_AUDIO, CMD_RF, 1, lightOn ? 1 : 0);
+  refreshLampTile();
+  refreshRoom();
+}
+
+// ---- shade: press starts a 20 s travel, press again stops it ----
+static void evTileShade(lv_event_t *e) {
+  if (shadeMoving != 0) {
+    sendMsg(NODE_AUDIO, CMD_RF, 0, 0);          // STOP
+    shadeMoving = 0;
+    Serial.printf("shade: stopped, picture stays as it is\n");
+  } else {
+    bool goDown = (shadePos < 500);
+    // TEST 068: the picture flips NOW, not over 20 seconds
+    shadePos    = goDown ? 1000 : 0;
+    shadeMoving = goDown ? 2 : 1;
+    shadeMoveStart = millis();
+    shadeStartMs   = millis();
+    sendMsg(NODE_AUDIO, CMD_RF, 0, goDown ? 2 : 1);
+  }
+  refreshShadeTile();
+  refreshRoom();
+}
+
+// ---- AC: short press toggles, long press opens the screen ----
+static void evTileACPressed(lv_event_t *e) {
+  acPressMs = millis();
+  acLongFired = false;
+}
+static void evTileACLong(lv_event_t *e) {
+  acLongFired = true;
+  lv_scr_load(scrAC);
+}
+static void evTileACReleased(lv_event_t *e) {
+  if (acLongFired) return;                       // the long press already acted
+  acPower = !acPower;
+  sendMsg(NODE_AUDIO, CMD_AC_POWER, 0, acPower ? 1 : 0);
+  refreshACTile();
+  refreshAC();
+}
+
+// Called every loop: advances the lamp colour and the shade travel.
+void animateTiles() {
+  uint32_t now = millis();
+
+  // TEST 068: the shutter still takes 20 s in the real world, so the
+  // moving flag is cleared when that time is up - but nothing is drawn
+  // during it. Pressing again inside the 20 s still sends STOP.
+  if (shadeMoving != 0 && (now - shadeMoveStart) >= SHADE_TRAVEL_MS) {
+    shadeMoving = 0;
+    Serial.println("shade: 20 s elapsed, assuming it has arrived");
+  }
+}
+
+void buildHome() {
+  scrHome = lv_obj_create(NULL);
+  lv_obj_set_style_bg_color(scrHome, lv_color_hex(0x101418), 0);
+
+  lv_obj_t *title = lv_label_create(scrHome);
+  // TEST 070: "BG" plus the Hebrew for bedroom. The Hebrew font now
+  // carries Latin too, so one label and one font does the whole title.
+  lv_label_set_text(title, TITLE_HOME);
+  lv_obj_set_style_text_font(title, &font_hebrew_28, 0);
+  lv_obj_set_style_text_color(title, lv_color_white(), 0);
+  lv_obj_align(title, LV_ALIGN_TOP_LEFT, 20, 14);
+
+  lblTestNum = lv_label_create(scrHome);
+  lv_label_set_text_fmt(lblTestNum, "TEST %03d", TEST_NUMBER);
+  lv_obj_set_style_text_font(lblTestNum, &lv_font_montserrat_20, 0);
+  lv_obj_set_style_text_color(lblTestNum, lv_color_hex(0x556070), 0);
+  lv_obj_align(lblTestNum, LV_ALIGN_TOP_MID, 0, 18);
+
+  // top-right: temperature + pressure trend arrow
+  lblSensors = lv_label_create(scrHome);
+  lv_label_set_text(lblSensors, "-- C");
+  lv_obj_set_style_text_font(lblSensors, &lv_font_montserrat_28, 0);
+  lv_obj_set_style_text_color(lblSensors, lv_color_hex(0x60D0FF), 0);
+  lv_obj_align(lblSensors, LV_ALIGN_TOP_RIGHT, -20, 14);
+
+  // ---- TEST 067: six photographic tiles, 3 across and 2 down ----
+  // Helper: make a tile at grid position (col,row) holding one image.
+  struct TilePos { int col, row; };
+  auto tileX = [](int c){ return TILE_X0 + c * (TILE_SZ + TILE_GAPX); };
+  auto tileY = [](int r){ return TILE_Y0 + r * (TILE_SZ + TILE_GAPY); };
+
+  auto makeTile = [&](int col, int row, uint32_t bg) {
+    lv_obj_t *b = lv_btn_create(scrHome);
+    lv_obj_set_size(b, TILE_SZ, TILE_SZ);
+    lv_obj_set_pos(b, tileX(col), tileY(row));
+    lv_obj_set_style_bg_color(b, lv_color_hex(bg), 0);
+    lv_obj_set_style_radius(b, 16, 0);
+    lv_obj_set_style_pad_all(b, 0, 0);
+    lv_obj_set_style_shadow_width(b, 0, 0);
+    lv_obj_clear_flag(b, LV_OBJ_FLAG_SCROLLABLE);
+    return b;
+  };
+
+  auto addImg = [&](lv_obj_t *parent, const lv_img_dsc_t *src) {
+    lv_obj_t *im = lv_img_create(parent);
+    lv_img_set_src(im, src);
+    lv_obj_center(im);
+    // TEST 080: recolour toward black at draw time. The images in
+    // tile_img.h are not modified, so raising or lowering TILE_DIM_OPA
+    // is the only edit needed to retune this.
+    lv_obj_set_style_img_recolor(im, lv_color_black(), 0);
+    lv_obj_set_style_img_recolor_opa(im, TILE_DIM_OPA, 0);
+    lv_obj_center(im);
+    return im;
+  };
+
+  // --- row 0: bed, radio, air conditioner ---
+  tileBed = makeTile(0, 0, 0x181C22);
+  tileBedImg = addImg(tileBed, &img_bed_off);
+  lv_obj_add_event_cb(tileBed, evGoMassage, LV_EVENT_CLICKED, NULL);
+
+  tileRadio = makeTile(1, 0, 0x181C22);
+  tileRadioImg = addImg(tileRadio, &img_radio_off);
+  lv_obj_add_event_cb(tileRadio, evGoRadio, LV_EVENT_CLICKED, NULL);
+
+  tileAC = makeTile(2, 0, 0x181C22);
+  tileACImg = addImg(tileAC, &img_ac_off);
+  lv_obj_add_event_cb(tileAC, evTileACPressed,  LV_EVENT_PRESSED, NULL);
+  lv_obj_add_event_cb(tileAC, evTileACLong,     LV_EVENT_LONG_PRESSED, NULL);
+  lv_obj_add_event_cb(tileAC, evTileACReleased, LV_EVENT_RELEASED, NULL);
+
+  // --- row 1: light, shutters, settings ---
+  tileLamp = makeTile(0, 1, 0x14262C);
+  tileLampImg = addImg(tileLamp, &img_lamp);
+  lv_obj_add_event_cb(tileLamp, evTileLamp, LV_EVENT_CLICKED, NULL);
+
+  tileShade = makeTile(1, 1, 0x181C22);
+  tileShadeImg = addImg(tileShade, &img_shade_open);
+  lv_obj_add_event_cb(tileShade, evTileShade, LV_EVENT_CLICKED, NULL);
+
+  lv_obj_t *tileSet = makeTile(2, 1, 0x232A33);
+  lv_obj_add_event_cb(tileSet, [](lv_event_t *e){ lv_scr_load(scrSettings); },
+                      LV_EVENT_CLICKED, NULL);
+  lv_obj_t *si = lv_label_create(tileSet);
+  lv_label_set_text(si, LV_SYMBOL_SETTINGS);
+  lv_obj_set_style_text_font(si, &lv_font_montserrat_40, 0);
+  lv_obj_set_style_text_color(si, lv_color_hex(0x8A94A0), 0);
+  lv_obj_center(si);
+
+  refreshLampTile();
+  refreshShadeTile();
+  refreshACTile();
+  refreshBedTile();
+  refreshRadioTile();
+
+  // TEST 065: the microphone UI has been REMOVED from the home screen.
+  // The level bar and the "mic 12%" text were rewritten on every loop
+  // pass with text of changing width, which made LVGL reflow the whole
+  // screen constantly - that was the jitter. Voice detection still runs
+  // and still reports on serial; use the `mic` and `dsp` commands.
+  // Every write to these is NULL-guarded, so the voice code carries on
+  // untouched - it just has nowhere on screen to draw.
+  micLbl = NULL; micBar = NULL; uttLbl = NULL; learnLbl = NULL;
+
+  // TEST 061: shown briefly when the wake word is recognised
+  wakeBanner = lv_label_create(scrHome);
+  lv_label_set_text(wakeBanner, "WAKE WORD");
+  lv_obj_set_style_text_font(wakeBanner, &lv_font_montserrat_40, 0);
+  lv_obj_set_style_text_color(wakeBanner, lv_color_hex(0x40E080), 0);
+  lv_obj_align(wakeBanner, LV_ALIGN_CENTER, 0, 0);
+  lv_obj_add_flag(wakeBanner, LV_OBJ_FLAG_HIDDEN);
+}
+
+// ============================================================
+//  TEST 075: Hebrew labels for the massage screen.
+//  LVGL is built with LV_CONF_SKIP, so bidirectional text is off
+//  and every Hebrew string has to be stored PRE-REVERSED, exactly
+//  as font_hebrew.h already does for HEB_BEDROOM and HEB_MAZGAN.
+//  The comment after each line is the word the right way round.
+// ============================================================
+#define Z_HEAD       "שאר"   // ראש
+#define Z_UPPER      "ןוילע בג"   // גב עליון
+#define Z_LOWER      "ןותחת בג"   // גב תחתון
+#define Z_LEGS       "םיילגר"   // רגליים
+#define P_MAPAL      "לפמ"   // מפל
+#define P_ALIYA      "היילע"   // עלייה
+#define P_NADNEDA    "הדנדנ"   // נדנדה
+#define P_MALE       "אלמ"   // מלא
+#define P_ALACHSON   "ןוסכלא"   // אלכסון
+#define P_TZAD       "דצ"   // צד
+#define P_SICHRUR    "רורחס"   // סחרור
+#define P_LISHA      "השיל"   // לישה
+#define P_DOFEK      "קפוד"   // דופק
+#define P_NESHIMA    "המישנ"   // נשימה
+#define P_GESHEM     "םשג"   // גשם
+#define P_AKRAI      "יארקא"   // אקראי
+#define M_OFF        "יוביכ"   // כיבוי
+
+// TEST 075: the DS3231 also holds a date, which nothing has read
+// until now. Registers 0x04 day, 0x05 month (bit 7 = century),
+// 0x06 year since 2000. If the date has never been set it will
+// read as rubbish - use  date DD MM YY  on the serial console.
+void ds3231GetDate(int &d, int &m, int &y) {
+  d = 0; m = 0; y = 0;
+  Wire.beginTransmission(DS3231_ADDR);
+  Wire.write(0x04);
+  if (Wire.endTransmission(false) != 0) return;
+  if (Wire.requestFrom(DS3231_ADDR, 3) != 3) return;
+  d = bcd2dec(Wire.read() & 0x3F);
+  m = bcd2dec(Wire.read() & 0x1F);
+  y = bcd2dec(Wire.read());
+}
+void ds3231SetDate(int d, int m, int y) {
+  Wire.beginTransmission(DS3231_ADDR);
+  Wire.write(0x04);
+  Wire.write(dec2bcd(d));
+  Wire.write(dec2bcd(m));
+  Wire.write(dec2bcd(y));
+  Wire.endTransmission();
+}
+
+lv_obj_t *lblMassTime = NULL, *lblMassDate = NULL, *lblMassTemp = NULL;
+
+// ---- TEST 077: the return path from the bed box ----
+// One four-byte frame per zone, {bedId, 20, zone, level}. Framing is
+// resynced by a quiet gap, exactly as the bed box does in the other
+// direction. lv_slider_set_value does NOT raise VALUE_CHANGED, so
+// nothing here echoes a command back down the wire.
+const uint8_t RPT_LEVEL = 20;
+uint8_t  upFrame[4];
+int      upLen = 0;
+unsigned long upLastByteMs = 0;
+long     upFramesSeen = 0;
+
+void pollBedBox() {
+  while (Serial1.available()) {
+    unsigned long now = millis();
+    if (upLen > 0 && now - upLastByteMs > 50) upLen = 0;
+    upLastByteMs = now;
+    upFrame[upLen++] = (uint8_t)Serial1.read();
+    if (upLen < 4) continue;
+    upLen = 0;
+    upFramesSeen++;
+
+    if (upFrame[1] != RPT_LEVEL) continue;
+    int z = upFrame[2], v = upFrame[3];
+    if (z < 0 || z > 3 || v > 100) continue;
+    if (!sliderZone[z]) continue;
+    lv_slider_set_value(sliderZone[z], v, LV_ANIM_OFF);
+    lv_label_set_text_fmt(lblZoneVal[z], "%d", v);
+  }
+}
+
+// Refreshes the three header labels. Cheap enough to run every second.
+void massHeaderTick(lv_timer_t *t) {
+  if (!lblMassTime) return;
+  long sec = nowSecOfDay();
+  if (sec >= 0)
+    lv_label_set_text_fmt(lblMassTime, "%02d:%02d",
+                          (int)(sec / 3600), (int)((sec / 60) % 60));
+  else
+    lv_label_set_text(lblMassTime, "--:--");
+
+  if (haveDS3231) {
+    int d, m, y; ds3231GetDate(d, m, y);
+    if (m >= 1 && m <= 12) lv_label_set_text_fmt(lblMassDate, "%d.%d.%02d", d, m, y);
+    else                   lv_label_set_text(lblMassDate, "");
+  }
+
+  if (tempOK) lv_label_set_text_fmt(lblMassTemp, "%d", (int)lroundf(gTemp));
+  else        lv_label_set_text(lblMassTemp, "--");
+}
+
+void buildMassage() {
+  scrMassage = lv_obj_create(NULL);
+  lv_obj_set_style_bg_color(scrMassage, lv_color_hex(0x0D0F16), 0);
+  lv_obj_clear_flag(scrMassage, LV_OBJ_FLAG_SCROLLABLE);
+
+  // ---------------- header ----------------
+  lv_obj_t *back = lv_btn_create(scrMassage);
+  lv_obj_set_size(back, 80, 44);
+  lv_obj_align(back, LV_ALIGN_TOP_LEFT, 8, 8);
+  lv_obj_set_style_bg_color(back, lv_color_hex(0x1A1E2A), 0);
+  lv_obj_add_event_cb(back, evGoHome, LV_EVENT_CLICKED, NULL);
+  lv_obj_t *bl = lv_label_create(back);
+  lv_label_set_text(bl, "<");
+  lv_obj_set_style_text_font(bl, &lv_font_montserrat_28, 0);
+  lv_obj_center(bl);
+
+  // Time, then the date, then the temperature with a small c.
+  lblMassTime = lv_label_create(scrMassage);
+  lv_label_set_text(lblMassTime, "--:--");
+  lv_obj_set_style_text_font(lblMassTime, &lv_font_montserrat_40, 0);
+  lv_obj_set_style_text_color(lblMassTime, lv_color_hex(0xE8EAF0), 0);
+  lv_obj_align(lblMassTime, LV_ALIGN_TOP_RIGHT, -280, 8);
+
+  lblMassDate = lv_label_create(scrMassage);
+  lv_label_set_text(lblMassDate, "");
+  lv_obj_set_style_text_font(lblMassDate, &lv_font_montserrat_28, 0);
+  lv_obj_set_style_text_color(lblMassDate, lv_color_hex(0x8992A6), 0);
+  lv_obj_align(lblMassDate, LV_ALIGN_TOP_RIGHT, -150, 16);
+
+  lblMassTemp = lv_label_create(scrMassage);
+  lv_label_set_text(lblMassTemp, "--");
+  lv_obj_set_style_text_font(lblMassTemp, &lv_font_montserrat_28, 0);
+  lv_obj_set_style_text_color(lblMassTemp, lv_color_hex(0xE8EAF0), 0);
+  lv_obj_align(lblMassTemp, LV_ALIGN_TOP_RIGHT, -46, 16);
+
+  lv_obj_t *cSmall = lv_label_create(scrMassage);
+  lv_label_set_text(cSmall, "c");
+  lv_obj_set_style_text_font(cSmall, &lv_font_montserrat_20, 0);
+  lv_obj_set_style_text_color(cSmall, lv_color_hex(0x8992A6), 0);
+  lv_obj_align(cSmall, LV_ALIGN_TOP_RIGHT, -24, 26);
+
+  lv_obj_t *rule = lv_obj_create(scrMassage);
+  lv_obj_set_size(rule, 780, 1);
+  lv_obj_align(rule, LV_ALIGN_TOP_MID, 0, 60);
+  lv_obj_set_style_bg_color(rule, lv_color_hex(0x232735), 0);
+  lv_obj_set_style_border_width(rule, 0, 0);
+
+  // ---------------- twelve mode tiles, left side ----------------
+  const char *PN[12] = {
+    P_MAPAL,     P_ALIYA,   P_NADNEDA, P_MALE,
+    P_ALACHSON,  P_TZAD,    P_SICHRUR, P_LISHA,
+    P_DOFEK,     P_NESHIMA, P_GESHEM,  P_AKRAI
+  };
+  const int TW = 139, TH = 106, TX = 16, TY = 74, TGX = 8, TGY = 8;
+  for (int i = 0; i < 12; i++) {
+    int col = i % 4, row = i / 4;
+    lv_obj_t *b = lv_btn_create(scrMassage);
+    lv_obj_set_size(b, TW, TH);
+    lv_obj_align(b, LV_ALIGN_TOP_LEFT, TX + col * (TW + TGX), TY + row * (TH + TGY));
+    lv_obj_set_style_radius(b, 10, 0);
+    lv_obj_set_style_shadow_width(b, 0, 0);
+    lv_obj_add_event_cb(b, evPreset, LV_EVENT_CLICKED, (void *)(intptr_t)i);
+    lv_obj_t *l = lv_label_create(b);
+    lv_label_set_text(l, PN[i]);
+    lv_obj_set_style_text_font(l, &font_hebrew_28, 0);
+    lv_obj_center(l);
+    patTile[i] = b;
+  }
+  refreshPatTiles();
+
+  // ---------------- four upright zone sliders, right side ----------------
+  const int SW = 30, SH = 250, SX = 618, SY = 86, SGX = 42;
+  for (int z = 0; z < 4; z++) {
+    int x = SX + z * SGX;
+
+    lblZoneVal[z] = lv_label_create(scrMassage);
+    lv_label_set_text(lblZoneVal[z], "0");
+    lv_obj_set_style_text_font(lblZoneVal[z], &lv_font_montserrat_20, 0);
+    lv_obj_set_style_text_color(lblZoneVal[z], lv_color_hex(0x8992A6), 0);
+    lv_obj_align(lblZoneVal[z], LV_ALIGN_TOP_LEFT, x, SY - 24);
+
+    sliderZone[z] = lv_slider_create(scrMassage);
+    lv_obj_set_size(sliderZone[z], SW, SH);          // taller than wide = upright
+    lv_obj_align(sliderZone[z], LV_ALIGN_TOP_LEFT, x, SY);
+    lv_slider_set_range(sliderZone[z], 0, 100);
+    lv_obj_set_style_bg_color(sliderZone[z], lv_color_hex(0x1A1E2A), LV_PART_MAIN);
+    lv_obj_set_style_bg_color(sliderZone[z], lv_color_hex(0x12B886), LV_PART_INDICATOR);
+    lv_obj_set_style_bg_color(sliderZone[z], lv_color_hex(0x2BD4A0), LV_PART_KNOB);
+    lv_obj_add_event_cb(sliderZone[z], evZoneSlider, LV_EVENT_VALUE_CHANGED, (void *)(intptr_t)z);
+    lv_obj_add_event_cb(sliderZone[z], evZoneSlider, LV_EVENT_RELEASED, (void *)(intptr_t)z);
+
+    // TEST 077: a Hebrew word will not fit legibly in a 30 px column.
+    // The columns are numbered instead: 1 head, 2 upper back,
+    // 3 lower back, 4 legs - the same order as the bed itself.
+    lv_obj_t *nm = lv_label_create(scrMassage);
+    lv_label_set_text_fmt(nm, "%d", z + 1);
+    lv_obj_set_style_text_font(nm, &lv_font_montserrat_28, 0);
+    lv_obj_set_style_text_color(nm, lv_color_hex(0xC8CDDB), 0);
+    lv_obj_align(nm, LV_ALIGN_TOP_LEFT, x + 8, SY + SH + 6);
+  }
+
+  // ---------------- bottom row: 15 / 30 / 60 / off ----------------
+  const int tm[3] = { 15, 30, 60 };
+  for (int i = 0; i < 3; i++) {
+    lv_obj_t *b = lv_btn_create(scrMassage);
+    lv_obj_set_size(b, 150, 52);
+    lv_obj_align(b, LV_ALIGN_BOTTOM_LEFT, 16 + i * 162, -10);
+    lv_obj_set_style_radius(b, 10, 0);
+    lv_obj_set_style_shadow_width(b, 0, 0);
+    lv_obj_set_style_bg_color(b, lv_color_hex(0x1F5A8A), 0);
+    lv_obj_add_event_cb(b, evTimer, LV_EVENT_CLICKED, (void *)(intptr_t)tm[i]);
+    lv_obj_t *l = lv_label_create(b);
+    lv_label_set_text_fmt(l, "%d", tm[i]);
+    lv_obj_set_style_text_font(l, &lv_font_montserrat_28, 0);
+    lv_obj_set_style_text_color(l, lv_color_hex(0xB5D4F4), 0);
+    lv_obj_center(l);
+  }
+
+  lv_obj_t *off = lv_btn_create(scrMassage);
+  lv_obj_set_size(off, 280, 52);
+  lv_obj_align(off, LV_ALIGN_BOTTOM_RIGHT, -16, -10);
+  lv_obj_set_style_radius(off, 10, 0);
+  lv_obj_set_style_shadow_width(off, 0, 0);
+  lv_obj_set_style_bg_color(off, lv_color_hex(0x8F1F1F), 0);
+  lv_obj_add_event_cb(off, evOff, LV_EVENT_CLICKED, NULL);
+  lv_obj_t *ol = lv_label_create(off);
+  lv_label_set_text(ol, M_OFF);
+  lv_obj_set_style_text_font(ol, &font_hebrew_28, 0);
+  lv_obj_set_style_text_color(ol, lv_color_hex(0xF7C1C1), 0);
+  lv_obj_center(ol);
+
+  lv_timer_create(massHeaderTick, 1000, NULL);
+  massHeaderTick(NULL);
+}
+
+
+void buildPlaceholder(lv_obj_t **scr, const char *name) {
+  *scr = lv_obj_create(NULL);
+  lv_obj_set_style_bg_color(*scr, lv_color_hex(0x101418), 0);
+  lv_obj_t *back = lv_btn_create(*scr);
+  lv_obj_set_size(back, 90, 50);
+  lv_obj_align(back, LV_ALIGN_TOP_LEFT, 10, 10);
+  lv_obj_add_event_cb(back, evGoHome, LV_EVENT_CLICKED, NULL);
+  lv_obj_t *bl = lv_label_create(back);
+  lv_label_set_text(bl, "<");
+  lv_obj_set_style_text_font(bl, &lv_font_montserrat_28, 0);
+  lv_obj_center(bl);
+  lv_obj_t *t = lv_label_create(*scr);
+  lv_label_set_text_fmt(t, "%s", name);
+  lv_obj_set_style_text_font(t, &lv_font_montserrat_40, 0);
+  lv_obj_set_style_text_color(t, lv_color_white(), 0);
+  lv_obj_align(t, LV_ALIGN_CENTER, 0, -30);
+  lv_obj_t *s = lv_label_create(*scr);
+  lv_label_set_text(s, "coming soon");
+  lv_obj_set_style_text_font(s, &lv_font_montserrat_28, 0);
+  lv_obj_set_style_text_color(s, lv_color_hex(0x7B90A0), 0);
+  lv_obj_align(s, LV_ALIGN_CENTER, 0, 40);
+}
+
+// ============================================================
+//  File browser
+// ============================================================
+lv_obj_t *fileList = NULL;
+void populateFiles(lv_obj_t *list) {
+  browseCount = 0;
+  if (!list) return;
+  lv_obj_clean(list);
+#if !ENABLE_SD
+  // TEST 053: those pins are the microphone now. Do not touch SPI.
+  lv_list_add_text(list, "SD disabled - GPIO 11/12/13 are the microphone");
+  return;
+#else
+  bool truncated = false;
+  const char *dirs[2] = { "/", "/photos" };
+  for (int di = 0; di < 2 && !truncated; di++) {
+    File dir = SD.open(dirs[di]);
+    if (!dir || !dir.isDirectory()) continue;
+    File e;
+    while ((e = dir.openNextFile()) && browseCount < MAX_BROWSE) {
+      if (!e.isDirectory()) {
+        // TEST 047: never ask LVGL for a button it has no room for.
+        // This exact call is what crashed TEST 046 inside lv_list_add_btn.
+        lv_mem_monitor_t mon;
+        lv_mem_monitor(&mon);
+        if (browseCount >= BROWSE_MAX_SHOWN ||
+            mon.free_size < LV_FREE_FLOOR ||
+            mon.free_biggest_size < LV_BIGGEST_FLOOR) {
+          truncated = true;
+          e.close();
+          break;
+        }
+        String n = e.name();
+        if (!n.startsWith("/")) n = String(dirs[di]) + (di==0?"":"/") + n;
+        String low = n; low.toLowerCase();
+        const char *sym = LV_SYMBOL_FILE;
+        if (low.endsWith(".jpg") || low.endsWith(".jpeg")) sym = LV_SYMBOL_IMAGE;
+        else if (low.endsWith(".mp4") || low.endsWith(".avi") || low.endsWith(".mov")) sym = LV_SYMBOL_VIDEO;
+        n.toCharArray(browseList[browseCount], 80);
+        lv_obj_t *btn = lv_list_add_btn(list, sym, browseList[browseCount]);
+        lv_obj_add_event_cb(btn, [](lv_event_t *ev){
+          int idx = (int)(intptr_t)lv_event_get_user_data(ev);
+          strncpy(previewPath, browseList[idx], sizeof(previewPath));
+          String p = String(previewPath); p.toLowerCase();
+          if (p.endsWith(".jpg") || p.endsWith(".jpeg")) {
+            state = ST_PREVIEW;
+            lv_scr_load(scrBlank);          // hide the list/UI
+            lv_refr_now(NULL);
+            if (!showPhoto(previewPath)) {
+              gfx->fillScreen(BLACK);
+              gfx->setTextColor(WHITE); gfx->setTextSize(3);
+              gfx->setCursor(180, 220); gfx->print("cannot open image");
+            }
+          } else {
+            state = ST_PREVIEW;
+            lv_scr_load(scrBlank);          // hide the list/UI
+            lv_refr_now(NULL);
+            gfx->fillScreen(BLACK);
+            gfx->setTextColor(0xFD20); gfx->setTextSize(3);
+            gfx->setCursor(120, 200); gfx->print("Video files can't play");
+            gfx->setTextColor(0x7BEF); gfx->setTextSize(2);
+            gfx->setCursor(120, 250); gfx->print("(ESP32 has no video decoder)");
+            gfx->setCursor(120, 300); gfx->print("Tap to return");
+          }
+        }, LV_EVENT_CLICKED, (void*)(intptr_t)browseCount);
+        browseCount++;
+      }
+      e.close();
+    }
+    dir.close();
+  }
+  if (truncated)
+    lv_list_add_text(list, "... more files not shown (low memory)");
+  else if (browseCount == 0)
+    lv_list_add_text(list, "SD empty / not mounted");
+
+  lv_mem_monitor_t mon; lv_mem_monitor(&mon);
+  Serial.printf("files: %d rows%s, LVGL free %u, biggest %u\n",
+                browseCount, truncated ? " (truncated)" : "",
+                (unsigned)mon.free_size, (unsigned)mon.free_biggest_size);
+#endif // ENABLE_SD
+}
+
+// TEST 047: build the Files list only while that tab is on screen.
+static void evSettingsTab(lv_event_t *e) {
+  lv_obj_t *tv = lv_event_get_target(e);
+  if (!tv || !fileList) return;
+  if (lv_tabview_get_tab_act(tv) == SETTINGS_TAB_FILES) {
+    populateFiles(fileList);
+  } else if (browseCount > 0) {
+    lv_obj_clean(fileList);
+    browseCount = 0;
+  }
+}
+
+// ============================================================
+//  Settings screen
+// ============================================================
+lv_obj_t *lblFloorVal=NULL, *ddSaver=NULL, *sldSmall=NULL, *sldBig=NULL,
+         *lblSmall=NULL, *lblBig=NULL, *ddRandom=NULL,
+         *lblNightVal=NULL;         // TEST 080
+
+// TEST 042: the LVGL rollers never worked (minute roller stayed empty, hour
+// scrolled one way only). Replaced with plain +/- buttons and 12-hour AM/PM.
+lv_obj_t *lblSetH=NULL, *lblSetM=NULL, *lblSetAP=NULL;
+int setHour12 = 12;      // 1..12
+int setMinute = 0;       // 0..59
+bool setPM    = false;
+void refreshSetterLabels();
+
+void refreshSetterLabels() {
+  if (!lblSetH || !lblSetM || !lblSetAP) return;   // TEST 044 guard
+  lv_label_set_text_fmt(lblSetH, "%d", setHour12);
+  lv_label_set_text_fmt(lblSetM, "%02d", setMinute);
+  lv_label_set_text(lblSetAP, setPM ? "PM" : "AM");
+}
+static void evHourUp(lv_event_t *e) { setHour12++; if (setHour12 > 12) setHour12 = 1;  refreshSetterLabels(); }
+static void evHourDn(lv_event_t *e) { setHour12--; if (setHour12 < 1)  setHour12 = 12; refreshSetterLabels(); }
+static void evMinUp (lv_event_t *e) { setMinute++; if (setMinute > 59) setMinute = 0;  refreshSetterLabels(); }
+static void evMinDn (lv_event_t *e) { setMinute--; if (setMinute < 0)  setMinute = 59; refreshSetterLabels(); }
+static void evAmPm  (lv_event_t *e) { setPM = !setPM;                                  refreshSetterLabels(); }
+
+// ---- TEST 076: date setter, same shape as the time setter ----
+int setDay = 1, setMon = 1, setYear = 26;     // year is 2000 + this
+lv_obj_t *lblSetD = NULL, *lblSetMo = NULL, *lblSetY = NULL;
+
+int daysInMonth(int m, int y) {
+  const int d[12] = {31,28,31,30,31,30,31,31,30,31,30,31};
+  if (m < 1 || m > 12) return 31;
+  if (m == 2 && ((y % 4) == 0)) return 29;    // 2000-2099, so this is enough
+  return d[m-1];
+}
+void refreshDateLabels() {
+  if (!lblSetD) return;
+  int mx = daysInMonth(setMon, setYear);
+  if (setDay > mx) setDay = mx;
+  lv_label_set_text_fmt(lblSetD,  "%d", setDay);
+  lv_label_set_text_fmt(lblSetMo, "%d", setMon);
+  lv_label_set_text_fmt(lblSetY,  "%02d", setYear);
+}
+static void evDayUp (lv_event_t *e) { setDay++;  if (setDay  > daysInMonth(setMon,setYear)) setDay = 1;  refreshDateLabels(); }
+static void evDayDn (lv_event_t *e) { setDay--;  if (setDay  < 1)  setDay  = daysInMonth(setMon,setYear); refreshDateLabels(); }
+static void evMonUp (lv_event_t *e) { setMon++;  if (setMon  > 12) setMon  = 1;  refreshDateLabels(); }
+static void evMonDn (lv_event_t *e) { setMon--;  if (setMon  < 1)  setMon  = 12; refreshDateLabels(); }
+static void evYearUp(lv_event_t *e) { setYear++; if (setYear > 99) setYear = 0;  refreshDateLabels(); }
+static void evYearDn(lv_event_t *e) { setYear--; if (setYear < 0)  setYear = 99; refreshDateLabels(); }
+
+static void evSetTime(lv_event_t *e) {
+  int h24 = setHour12 % 12;              // 12 AM -> 0, 12 PM -> 12
+  if (setPM) h24 += 12;
+  baseSecOfDay = (long)h24*3600 + (long)setMinute*60;
+  baseMillis = millis(); timeSet = true;
+  if (haveDS3231) {
+    ds3231SetHM(h24, setMinute);
+    ds3231SetDate(setDay, setMon, setYear);        // TEST 076
+    Serial.printf("DS3231 date set to %d.%d.%02d\n", setDay, setMon, setYear);
+  }
+  Serial.printf("time set %d:%02d %s  (%02d:%02d 24h)\n",
+                setHour12, setMinute, setPM ? "PM" : "AM", h24, setMinute);
+}
+static void evFloor(lv_event_t *e) {
+  brightFloor = lv_slider_get_value(lv_event_get_target(e));
+  lv_label_set_text_fmt(lblFloorVal, "%d%%", brightFloor);
+  saveSettings();
+}
+// TEST 080: the night floor. Applied immediately so the effect is visible
+// while the finger is still on the slider - the only sane way to pick a
+// brightness this low is to look at it.
+static void evNightFloor(lv_event_t *e) {
+  saverFloor = lv_slider_get_value(lv_event_get_target(e));
+  lv_label_set_text_fmt(lblNightVal, "%d%%", saverFloor);
+  computeTargetFromLux();
+  saveSettings();
+}
+static void evSaver(lv_event_t *e) {
+  const uint32_t opts[4] = {30000UL,60000UL,300000UL,600000UL};
+  saverTimeoutMs = opts[lv_dropdown_get_selected(ddSaver)];
+  saveSettings();
+}
+static void evSmall(lv_event_t *e) {
+  setMinSmall = lv_slider_get_value(lv_event_get_target(e));
+  lv_label_set_text_fmt(lblSmall, "%d", setMinSmall); saveSettings();
+}
+static void evBig(lv_event_t *e) {
+  setMinBig = lv_slider_get_value(lv_event_get_target(e));
+  lv_label_set_text_fmt(lblBig, "%d", setMinBig); saveSettings();
+}
+static void evSlideshow(lv_event_t *e) {          // TEST 041
+  if (photoCount == 0) { Serial.println("slideshow: no photos"); return; }
+  slideOn     = true;
+  slideIdx    = 0;
+  slideNextMs = 0;                                // show the first one at once
+  state       = ST_PREVIEW;
+  lv_scr_load(scrBlank);
+  lv_refr_now(NULL);
+  Serial.printf("slideshow: %d photos, %d ms each\n", photoCount, SLIDE_MS);
+}
+static void evRandom(lv_event_t *e) {
+  randomChar = lv_dropdown_get_selected(ddRandom); saveSettings();
+}
+
+
+
+
+// ============================================================
+//  Diver-watch clock (dial image + green arrow hands)
+// ============================================================
+void fillGlowLine(int x0,int y0,int x1,int y1,int w,uint16_t core,uint16_t glow){
+  // simple glow: draw a few offset thick lines then the core
+  for(int gx=-2; gx<=2; gx++) for(int gy=-2; gy<=2; gy++){
+    if(gx==0&&gy==0) continue;
+    for(int t=-(w/2); t<=w/2; t++){
+      // thickness via perpendicular offset approx: draw parallel lines
+    }
+  }
+}
+
+// draw a thick line with rounded feel by stamping filled circles along it
+void thickLine(int x0,int y0,int x1,int y1,int r,uint16_t col){
+  int dx=abs(x1-x0), dy=abs(y1-y0);
+  int steps = (dx>dy?dx:dy); if(steps<1) steps=1;
+  for(int i=0;i<=steps;i++){
+    int x = x0 + (x1-x0)*i/steps;
+    int y = y0 + (y1-y0)*i/steps;
+    gfx->fillCircle(x,y,r,col);
+  }
+}
+
+void drawHand(float ang, int lenTail, int lenTip, int r, uint16_t glow, uint16_t core){
+  // ang radians, 0=12 o'clock
+  int cx=CLOCK_CX, cy=CLOCK_CY;
+  int tx = cx + (int)(sinf(ang)*lenTip);
+  int ty = cy - (int)(cosf(ang)*lenTip);
+  int bx = cx - (int)(sinf(ang)*lenTail);
+  int by = cy + (int)(cosf(ang)*lenTail);
+  // glow underlay (thicker, dim green)
+  thickLine(bx,by,tx,ty,r+3,glow);
+  // core
+  thickLine(bx,by,tx,ty,r,core);
+  // arrow tip
+  int ax = cx + (int)(sinf(ang)*(lenTip-18));
+  int ay = cy - (int)(cosf(ang)*(lenTip-18));
+  gfx->fillCircle(tx,ty,r+5,glow);
+  gfx->fillCircle(ax,ay,r+3,core);
+}
+
+// ============================================================
+//  TEST 055: rasterisers that draw into clockBuf, not the screen.
+//  Coordinates are region-local (subtract CLK_REG_X0 / CLK_REG_Y0).
+// ============================================================
+static void cbFillCircle(int cx, int cy, int r, uint16_t col) {
+  if (!clockBuf) return;
+  for (int dy = -r; dy <= r; dy++) {
+    int y = cy + dy;
+    if (y < 0 || y >= CLK_REG_H) continue;
+    int span = (int)(sqrtf((float)(r * r - dy * dy)) + 0.5f);
+    int x0 = cx - span, x1 = cx + span;
+    if (x0 < 0) x0 = 0;
+    if (x1 >= CLK_REG_W) x1 = CLK_REG_W - 1;
+    uint16_t *row = &clockBuf[(size_t)y * CLK_REG_W];
+    for (int x = x0; x <= x1; x++) row[x] = col;
+  }
+}
+
+static void cbThickLine(int x0, int y0, int x1, int y1, int r, uint16_t col) {
+  int dx = abs(x1 - x0), dy = abs(y1 - y0);
+  int steps = (dx > dy) ? dx : dy;
+  if (steps < 1) steps = 1;
+  for (int i = 0; i <= steps; i++) {
+    cbFillCircle(x0 + (x1 - x0) * i / steps,
+                 y0 + (y1 - y0) * i / steps, r, col);
+  }
+}
+
+static void cbDrawHand(float ang, int lenTail, int lenTip, int r,
+                       uint16_t glow, uint16_t core) {
+  int cx = CLOCK_CX - CLK_REG_X0, cy = CLOCK_CY - CLK_REG_Y0;
+  int tx = cx + (int)(sinf(ang) * lenTip);
+  int ty = cy - (int)(cosf(ang) * lenTip);
+  int bx = cx - (int)(sinf(ang) * lenTail);
+  int by = cy + (int)(cosf(ang) * lenTail);
+  cbThickLine(bx, by, tx, ty, r + 3, glow);
+  cbThickLine(bx, by, tx, ty, r, core);
+  int ax = cx + (int)(sinf(ang) * (lenTip - 18));
+  int ay = cy - (int)(cosf(ang) * (lenTip - 18));
+  cbFillCircle(tx, ty, r + 5, glow);
+  cbFillCircle(ax, ay, r + 3, core);
+}
+
+void drawDiverClock(bool full){
+  static int lastTempInt = -999;
+  bool compose = (dialCached && dialBuf && clockBuf);
+
+  // TEST 055: the full-screen background is painted only when entering
+  // the screensaver, not once a second.
+  if (full || !compose) {
+    if (dialCached && dialBuf) {
+      gfx->draw16bitRGBBitmap(0, 0, dialBuf, SCREEN_W, SCREEN_H);
+    } else if (haveDial) {
+      if (!showPhoto(DIAL_FILE)) gfx->fillScreen(BLACK);
+    } else {
+      gfx->fillScreen(0x0842);
+    }
+    lastTempInt = -999;            // force the temperature back on screen
+  }
+
+  long s = nowSecOfDay(); if (s<0) s=0;
+  int hh=(s/3600)%12, mm=(s/60)%60, ss=s%60;
+  const float D=3.14159265f/180.0f;
+  const uint16_t GCORE=0x2586;   // TEST 043: green at ~70%
+  const uint16_t GGLOW=0x0844;   // dimmer glow to match
+
+  if (compose) {
+    // TEST 055: rebuild the clock area off-screen - clean dial, then
+    // hands on top - and push the finished image in a single blit.
+    for (int y = 0; y < CLK_REG_H; y++) {
+      memcpy(&clockBuf[(size_t)y * CLK_REG_W],
+             &dialBuf[(size_t)(CLK_REG_Y0 + y) * SCREEN_W + CLK_REG_X0],
+             (size_t)CLK_REG_W * sizeof(uint16_t));
+    }
+    // TEST 066: pre-dimmed to SAVER_DIM. GCORE 0x2FE9 -> 0x1DE6,
+    // GGLOW 0x0BC5 -> 0x02C3, the red second hand and the white cap
+    // taken down by the same proportion.
+    // TEST 069: re-dimmed from 75 to 56 percent
+    cbDrawHand((hh*30+mm*0.5f)*D, 22, 120, 7, 0x0202, 0x1465);
+    cbDrawHand((mm*6+ss*0.1f)*D,  26, 175, 5, 0x0202, 0x1465);
+    cbDrawHand((ss*6)*D,          40, 195, 2, 0x0801, 0x5800);
+    cbFillCircle(CLOCK_CX - CLK_REG_X0, CLOCK_CY - CLK_REG_Y0, 10, 0x1465);
+    cbFillCircle(CLOCK_CX - CLK_REG_X0, CLOCK_CY - CLK_REG_Y0,  5, 0x8C71);
+    gfx->draw16bitRGBBitmap(CLK_REG_X0, CLK_REG_Y0, clockBuf,
+                            CLK_REG_W, CLK_REG_H);
+  } else {
+    // fallback: straight to the screen, as TEST 054 did
+    drawHand((hh*30+mm*0.5f)*D, 22, 120, 7, 0x0202, 0x1465);
+    drawHand((mm*6+ss*0.1f)*D,  26, 175, 5, 0x0202, 0x1465);
+    drawHand((ss*6)*D, 40, 195, 2, 0x0801, 0x5800);
+    gfx->fillCircle(CLOCK_CX,CLOCK_CY,10,0x1465);
+    gfx->fillCircle(CLOCK_CX,CLOCK_CY,5,0x8C71);
+  }
+
+  // TEST 049: if the dial is not on screen, say why, on the screen.
+  if (full && !dialCached) {
+    gfx->setTextColor(0xFFE0, BLACK);
+    gfx->setTextSize(2);
+    gfx->setCursor(10, SCREEN_H - 26);
+    gfx->print(dialStatus);
+  }
+
+  // TEST 046: temperature in the right-hand margin, whole degrees,
+  // large enough to read from the bed without glasses.
+  // Character cell is 6*size wide by 8*size tall, so size 9 = 54 x 72 px.
+  if (tempOK) {
+    int tInt = (int)lroundf(gTemp);
+    if (tInt < -99) tInt = -99;
+    if (tInt >  99) tInt =  99;
+    // TEST 055: repaint only when the whole number actually changes.
+    if (tInt == lastTempInt) return;
+    lastTempInt = tInt;
+    gfx->fillRect(TEMP_CLR_X, TEMP_CLR_Y, TEMP_CLR_W, TEMP_CLR_H, BLACK);
+
+    char t[8]; snprintf(t, sizeof(t), "%d", tInt);
+
+    // Two digits get the big size; a three-character reading such as
+    // "-12" drops a size so the block stays the same overall width.
+    // TEST 051: real font. Offsets in temp_font.h are measured from the
+    // top of the digits (not the baseline - that overflowed int8_t), so
+    // the cursor y is the digit top. getTextBounds() handles either
+    // convention, so the placement maths below does not care.
+    int16_t bx, by, cxb, cyb;
+    uint16_t bw, bh, cw, chh;
+
+    gfx->setTextSize(1);
+    gfx->setFont(&TempBig);
+    gfx->getTextBounds(t, 0, 0, &bx, &by, &bw, &bh);
+    gfx->setFont(&TempSmall);
+    gfx->getTextBounds("C", 0, 0, &cxb, &cyb, &cw, &chh);
+
+    int blockW = (int)bw + TEMP_C_GAP + (int)cw;
+    int left   = TEMP_CX - blockW / 2;      // digits + gap + C, centred
+    int top    = CLOCK_CY - (int)bh / 2;    // level with the middle of the dial
+    if (left < 0) left = 0;
+    if (left + blockW > SCREEN_W) left = SCREEN_W - blockW;
+
+    // TEST 066: light blue, not green. 0x4CF7 is #60D0FF at 75 percent,
+    // matching the dimming applied to everything else on this screen.
+    // TEST 069: soft grey, not blue. 0x9D15 is about #98A0A8.
+    gfx->setTextColor(0x9D15);
+    gfx->setFont(&TempBig);
+    gfx->setCursor(left - bx, top - by);
+    gfx->print(t);
+
+    // C to the RIGHT of the digits, sharing their bottom line
+    gfx->setFont(&TempSmall);
+    gfx->setCursor(left + (int)bw + TEMP_C_GAP - cxb,
+                   top + (int)bh - (int)chh - cyb);
+    gfx->print("C");
+
+    gfx->setFont(NULL);                     // back to the built-in font
+    gfx->setTextSize(1);
+  }
+}
+
+// ============================================================
+//  Analog round clock (screensaver)
+// ============================================================
+#define ANA_CX 400
+#define ANA_CY 250
+#define ANA_R  230
+void buildAnalog() {
+  anaScr = lv_obj_create(NULL);
+  lv_obj_set_style_bg_color(anaScr, lv_color_hex(0x131C26), 0);
+  lv_obj_set_style_bg_grad_color(anaScr, lv_color_hex(0x0A1017), 0);
+  lv_obj_set_style_bg_grad_dir(anaScr, LV_GRAD_DIR_VER, 0);
+  lv_obj_clear_flag(anaScr, LV_OBJ_FLAG_SCROLLABLE);
+
+  // face circle
+  anaFace = lv_obj_create(anaScr);
+  lv_obj_set_size(anaFace, ANA_R*2, ANA_R*2);
+  lv_obj_align(anaFace, LV_ALIGN_CENTER, 0, 0);
+  lv_obj_set_style_radius(anaFace, LV_RADIUS_CIRCLE, 0);
+  lv_obj_set_style_bg_color(anaFace, lv_color_hex(0x1B2836), 0);
+  lv_obj_set_style_bg_grad_color(anaFace, lv_color_hex(0x101822), 0);
+  lv_obj_set_style_bg_grad_dir(anaFace, LV_GRAD_DIR_VER, 0);
+  lv_obj_set_style_border_color(anaFace, lv_color_hex(0x4C7C9C), 0);
+  lv_obj_set_style_border_width(anaFace, 6, 0);
+  lv_obj_clear_flag(anaFace, LV_OBJ_FLAG_SCROLLABLE);
+
+  // 12 tick marks
+  for (int i = 0; i < 12; i++) {
+    float a = i * 30.0f * 3.14159265f / 180.0f;
+    int r1 = ANA_R - 22, r2 = ANA_R - 8;
+    lv_obj_t *tick = lv_obj_create(anaScr);
+    lv_obj_set_size(tick, (i%3==0)?10:5, (i%3==0)?10:5);
+    lv_obj_set_style_radius(tick, LV_RADIUS_CIRCLE, 0);
+    lv_obj_set_style_bg_color(tick, lv_color_hex((i%3==0)?0xE0A860:0x546B80), 0);
+    lv_obj_set_style_border_width(tick, 0, 0);
+    int mr = (r1+r2)/2;
+    lv_obj_align(tick, LV_ALIGN_CENTER, (int)(sinf(a)*mr), (int)(-cosf(a)*mr));
+    lv_obj_clear_flag(tick, LV_OBJ_FLAG_SCROLLABLE);
+  }
+
+  // hour numbers 1..12
+  for (int n = 1; n <= 12; n++) {
+    float a = n * 30.0f * 3.14159265f / 180.0f;
+    int nr = ANA_R - 52;
+    lv_obj_t *num = lv_label_create(anaScr);
+    lv_label_set_text_fmt(num, "%d", n);
+    lv_obj_set_style_text_font(num, &lv_font_montserrat_28, 0);
+    lv_obj_set_style_text_color(num, lv_color_hex(0xF0E6D2), 0);
+    lv_obj_align(num, LV_ALIGN_CENTER, (int)(sinf(a)*nr), (int)(-cosf(a)*nr));
+    lv_obj_clear_flag(num, LV_OBJ_FLAG_SCROLLABLE);
+  }
+
+  // hand styles
+  lv_style_init(&stHour); lv_style_set_line_width(&stHour, 16);
+  lv_style_set_line_color(&stHour, lv_color_hex(0xA2712A));  // TEST 043: ~70%
+  lv_style_set_line_rounded(&stHour, true);
+  lv_style_init(&stMin); lv_style_set_line_width(&stMin, 11);
+  lv_style_set_line_color(&stMin, lv_color_hex(0x86A7B2));   // TEST 043: ~70%
+  lv_style_set_line_rounded(&stMin, true);
+  lv_style_init(&stSec); lv_style_set_line_width(&stSec, 4);
+  lv_style_set_line_color(&stSec, lv_color_hex(0xA8433B));   // TEST 043: ~70%
+  lv_style_set_line_rounded(&stSec, true);
+
+  anaHour = lv_line_create(anaScr); lv_obj_add_style(anaHour, &stHour, 0);
+  anaMin  = lv_line_create(anaScr); lv_obj_add_style(anaMin, &stMin, 0);
+  anaSec  = lv_line_create(anaScr); lv_obj_add_style(anaSec, &stSec, 0);
+
+  // center hub
+  anaCenter = lv_obj_create(anaScr);
+  lv_obj_set_size(anaCenter, 26, 26);
+  lv_obj_align(anaCenter, LV_ALIGN_CENTER, 0, 0);
+  lv_obj_set_style_radius(anaCenter, LV_RADIUS_CIRCLE, 0);
+  lv_obj_set_style_bg_color(anaCenter, lv_color_hex(0xE8A23C), 0);
+  lv_obj_set_style_border_width(anaCenter, 0, 0);
+  lv_obj_clear_flag(anaCenter, LV_OBJ_FLAG_SCROLLABLE);
+
+  // temperature (green), top-right
+  anaTemp = lv_label_create(anaScr);
+  lv_label_set_text(anaTemp, "");
+  lv_obj_set_style_text_font(anaTemp, &lv_font_montserrat_20, 0);
+  lv_obj_set_style_text_color(anaTemp, lv_color_hex(0x35D06A), 0);
+  lv_obj_align(anaTemp, LV_ALIGN_TOP_RIGHT, -30, 24);
+}
+
+void setHand(lv_obj_t *line, lv_point_t *pts, float ang, int len) {
+  pts[0].x = ANA_CX; pts[0].y = ANA_CY;
+  pts[1].x = ANA_CX + (int)(sinf(ang) * len);
+  pts[1].y = ANA_CY - (int)(cosf(ang) * len);
+  lv_line_set_points(line, pts, 2);
+}
+
+void updateAnalog() {
+  if (!anaHour || !anaMin || !anaSec) return;      // TEST 044 guard
+  long s = nowSecOfDay();
+  if (s < 0) s = 0;
+  int hh = (s/3600) % 12, mm = (s/60)%60, ss = s%60;
+  const float D = 3.14159265f / 180.0f;
+  setHand(anaHour, hourPts, (hh*30 + mm*0.5f) * D, ANA_R - 115);
+  setHand(anaMin,  minPts,  (mm*6 + ss*0.1f)  * D, ANA_R - 45);
+  setHand(anaSec,  secPts,  (ss*6)            * D, ANA_R - 30);
+  if (tempOK) { char t[16]; snprintf(t, sizeof(t), "%d C", (int)lroundf(gTemp)); lv_label_set_text(anaTemp, t); }
+  else lv_label_set_text(anaTemp, "");
+}
+
+// ============================================================
+//  Elegant LVGL clock (screensaver)
+// ============================================================
+void buildClock() {
+  scrClock = lv_obj_create(NULL);
+  lv_obj_set_style_bg_color(scrClock, lv_color_black(), 0);
+  lv_obj_clear_flag(scrClock, LV_OBJ_FLAG_SCROLLABLE);
+
+  // soft glow: a dim, slightly larger copy behind
+  clkGlow = lv_label_create(scrClock);
+  lv_label_set_text(clkGlow, "--:--");
+  lv_obj_set_style_text_font(clkGlow, &lv_font_montserrat_40, 0);
+  lv_obj_set_style_text_color(clkGlow, lv_color_hex(0x0E5075), 0);
+  lv_obj_set_style_text_letter_space(clkGlow, 16, 0);
+  lv_obj_align(clkGlow, LV_ALIGN_CENTER, 2, -8);
+
+  // main sharp digits
+  clkMain = lv_label_create(scrClock);
+  lv_label_set_text(clkMain, "--:--");
+  lv_obj_set_style_text_font(clkMain, &lv_font_montserrat_40, 0);
+  lv_obj_set_style_text_color(clkMain, lv_color_hex(0xBFEFFF), 0);
+  lv_obj_set_style_text_letter_space(clkMain, 16, 0);
+  lv_obj_align(clkMain, LV_ALIGN_CENTER, 0, -10);
+
+  // temperature, small and refined, top-right
+  clkTemp = lv_label_create(scrClock);
+  lv_label_set_text(clkTemp, "");
+  lv_obj_set_style_text_font(clkTemp, &lv_font_montserrat_20, 0);
+  lv_obj_set_style_text_color(clkTemp, lv_color_hex(0x35D06A), 0);   // green
+  lv_obj_set_style_text_letter_space(clkTemp, 2, 0);
+  lv_obj_align(clkTemp, LV_ALIGN_TOP_RIGHT, -30, 24);
+}
+
+void updateClockFace() {
+  if (!clkMain || !clkGlow) return;               // TEST 044 guard
+  long s = nowSecOfDay();
+  char buf[16];
+  if (s >= 0) {                                   // TEST 042: 12-hour + AM/PM
+    int h24 = (int)(s/3600), mm = (int)((s/60)%60);
+    int h12 = h24 % 12; if (h12 == 0) h12 = 12;
+    snprintf(buf, sizeof(buf), "%d:%02d %s", h12, mm, (h24 >= 12) ? "PM" : "AM");
+  } else snprintf(buf, sizeof(buf), "--:--");
+  lv_label_set_text(clkMain, buf);
+  lv_label_set_text(clkGlow, buf);
+  if (tempOK) { char t[16]; snprintf(t, sizeof(t), "%d C", (int)lroundf(gTemp)); lv_label_set_text(clkTemp, t); }
+  else lv_label_set_text(clkTemp, "");
+}
+
+void buildSettings() {
+  scrSettings = lv_obj_create(NULL);
+  lv_obj_set_style_bg_color(scrSettings, lv_color_hex(0x101418), 0);
+
+  lv_obj_t *back = lv_btn_create(scrSettings);
+  lv_obj_set_size(back, 90, 46);
+  lv_obj_align(back, LV_ALIGN_TOP_LEFT, 8, 6);
+  lv_obj_add_event_cb(back, evGoHome, LV_EVENT_CLICKED, NULL);
+  lv_obj_t *bl = lv_label_create(back); lv_label_set_text(bl, "<");
+  lv_obj_set_style_text_font(bl, &lv_font_montserrat_28, 0); lv_obj_center(bl);
+
+  lv_obj_t *tv = lv_tabview_create(scrSettings, LV_DIR_TOP, 48);
+  lv_obj_set_size(tv, 800, 424);
+  lv_obj_align(tv, LV_ALIGN_BOTTOM_MID, 0, 0);
+
+  // TEST 073: paint the tabview and its bar grey. Without this LVGL's
+  // light theme leaves them near white.
+  lv_obj_set_style_bg_color(tv, lv_color_hex(SET_PAGE_BG), 0);
+  lv_obj_set_style_bg_opa(tv, LV_OPA_COVER, 0);
+
+  lv_obj_t *tabbar = lv_tabview_get_tab_btns(tv);
+  lv_obj_set_style_bg_color(tabbar, lv_color_hex(SET_BAR_BG), 0);
+  lv_obj_set_style_bg_opa(tabbar, LV_OPA_COVER, 0);
+  lv_obj_set_style_text_color(tabbar, lv_color_hex(SET_DIM_COL), 0);
+  // the selected tab
+  lv_obj_set_style_text_color(tabbar, lv_color_hex(SET_TEXT_COL),
+                              LV_PART_ITEMS | LV_STATE_CHECKED);
+  lv_obj_set_style_bg_color(tabbar, lv_color_hex(SET_PAGE_BG),
+                            LV_PART_ITEMS | LV_STATE_CHECKED);
+  lv_obj_set_style_bg_opa(tabbar, LV_OPA_COVER,
+                          LV_PART_ITEMS | LV_STATE_CHECKED);
+
+  lv_obj_t *tClock = lv_tabview_add_tab(tv, "Clock");
+  lv_obj_t *tDisp  = lv_tabview_add_tab(tv, "Display");
+  lv_obj_t *tMass  = lv_tabview_add_tab(tv, "Massage");
+  lv_obj_t *tFiles = lv_tabview_add_tab(tv, "Files");
+  lv_obj_t *tAbout = lv_tabview_add_tab(tv, "About");
+
+  // every page grey, and its default text light
+  lv_obj_t *pages[5] = { tClock, tDisp, tMass, tFiles, tAbout };
+  for (int i = 0; i < 5; i++) {
+    lv_obj_set_style_bg_color(pages[i], lv_color_hex(SET_PAGE_BG), 0);
+    lv_obj_set_style_bg_opa(pages[i], LV_OPA_COVER, 0);
+    lv_obj_set_style_text_color(pages[i], lv_color_hex(SET_TEXT_COL), 0);
+  }
+  // the scrollable container LVGL puts the pages in
+  lv_obj_t *cont = lv_tabview_get_content(tv);
+  lv_obj_set_style_bg_color(cont, lv_color_hex(SET_PAGE_BG), 0);
+  lv_obj_set_style_bg_opa(cont, LV_OPA_COVER, 0);
+  // TEST 047: Clock 0, Display 1, Massage 2, Files 3, About 4
+  lv_obj_add_event_cb(tv, evSettingsTab, LV_EVENT_VALUE_CHANGED, NULL);
+
+  // ---- Clock ----
+
+  // centered row: [hour] : [min]
+  lv_obj_t *row = lv_obj_create(tClock);
+  lv_obj_set_size(row, 560, 92);          // TEST 078: was 220, which swallowed the date row
+  lv_obj_align(row, LV_ALIGN_TOP_MID, 0, 10);
+  lv_obj_set_style_bg_opa(row, LV_OPA_TRANSP, 0);
+  lv_obj_set_style_border_width(row, 0, 0);
+  lv_obj_clear_flag(row, LV_OBJ_FLAG_SCROLLABLE);
+  lv_obj_set_flex_flow(row, LV_FLEX_FLOW_ROW);
+  lv_obj_set_flex_align(row, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+  lv_obj_set_style_pad_column(row, 18, 0);
+
+  // ---- TEST 042: +/- fields.  [-] H [+]  :  [-] MM [+]   [AM/PM] ----
+  // helper-free on purpose: three explicit blocks, easy to read and tweak.
+  lv_obj_t *bHd = lv_btn_create(row); lv_obj_set_size(bHd, 64, 64);
+  lv_obj_add_event_cb(bHd, evHourDn, LV_EVENT_CLICKED, NULL);
+  lv_obj_t *lHd = lv_label_create(bHd); lv_label_set_text(lHd, "-");
+  lv_obj_set_style_text_font(lHd, &lv_font_montserrat_28, 0); lv_obj_center(lHd);
+
+  lblSetH = lv_label_create(row); lv_label_set_text(lblSetH, "12");
+  lv_obj_set_style_text_font(lblSetH, &lv_font_montserrat_40, 0);
+  lv_obj_set_style_text_color(lblSetH, lv_color_hex(SET_TEXT_COL), 0);
+
+  lv_obj_t *bHu = lv_btn_create(row); lv_obj_set_size(bHu, 64, 64);
+  lv_obj_add_event_cb(bHu, evHourUp, LV_EVENT_CLICKED, NULL);
+  lv_obj_t *lHu = lv_label_create(bHu); lv_label_set_text(lHu, "+");
+  lv_obj_set_style_text_font(lHu, &lv_font_montserrat_28, 0); lv_obj_center(lHu);
+
+  lv_obj_t *cln = lv_label_create(row); lv_label_set_text(cln, ":");
+  lv_obj_set_style_text_font(cln, &lv_font_montserrat_40, 0);
+  lv_obj_set_style_text_color(cln, lv_color_hex(SET_TEXT_COL), 0);
+
+  lv_obj_t *bMd = lv_btn_create(row); lv_obj_set_size(bMd, 64, 64);
+  lv_obj_add_event_cb(bMd, evMinDn, LV_EVENT_CLICKED, NULL);
+  lv_obj_t *lMd = lv_label_create(bMd); lv_label_set_text(lMd, "-");
+  lv_obj_set_style_text_font(lMd, &lv_font_montserrat_28, 0); lv_obj_center(lMd);
+
+  lblSetM = lv_label_create(row); lv_label_set_text(lblSetM, "00");
+  lv_obj_set_style_text_font(lblSetM, &lv_font_montserrat_40, 0);
+  lv_obj_set_style_text_color(lblSetM, lv_color_hex(SET_TEXT_COL), 0);
+
+  lv_obj_t *bMu = lv_btn_create(row); lv_obj_set_size(bMu, 64, 64);
+  lv_obj_add_event_cb(bMu, evMinUp, LV_EVENT_CLICKED, NULL);
+  lv_obj_t *lMu = lv_label_create(bMu); lv_label_set_text(lMu, "+");
+  lv_obj_set_style_text_font(lMu, &lv_font_montserrat_28, 0); lv_obj_center(lMu);
+
+  lv_obj_t *bAP = lv_btn_create(row); lv_obj_set_size(bAP, 92, 64);
+  lv_obj_set_style_bg_color(bAP, lv_color_hex(0x244055), 0);
+  lv_obj_add_event_cb(bAP, evAmPm, LV_EVENT_CLICKED, NULL);
+  lblSetAP = lv_label_create(bAP); lv_label_set_text(lblSetAP, "AM");
+  lv_obj_set_style_text_font(lblSetAP, &lv_font_montserrat_28, 0); lv_obj_center(lblSetAP);
+
+  // seed the fields from the clock we are already keeping
+  { long s = nowSecOfDay();
+    if (s >= 0) {
+      int h24 = (int)(s/3600), mm = (int)((s/60)%60);
+      setPM     = (h24 >= 12);
+      setHour12 = h24 % 12; if (setHour12 == 0) setHour12 = 12;
+      setMinute = mm;
+    }
+  }
+  refreshSetterLabels();
+
+  // ---- TEST 076: second row, day / month / year ----
+  lv_obj_t *drow = lv_obj_create(tClock);
+  lv_obj_remove_style_all(drow);
+  lv_obj_set_size(drow, 700, 80);
+  lv_obj_align(drow, LV_ALIGN_TOP_MID, 0, 126);   // TEST 078: 34 px of air below the time
+  lv_obj_set_flex_flow(drow, LV_FLEX_FLOW_ROW);
+  lv_obj_set_flex_align(drow, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+  lv_obj_set_style_pad_column(drow, 8, 0);
+  lv_obj_clear_flag(drow, LV_OBJ_FLAG_SCROLLABLE);
+
+  struct { const char *cap; lv_event_cb_t dn; lv_event_cb_t up; lv_obj_t **lbl; }
+  dparts[3] = {
+    { "day",   evDayDn,  evDayUp,  &lblSetD  },
+    { "month", evMonDn,  evMonUp,  &lblSetMo },
+    { "year",  evYearDn, evYearUp, &lblSetY  }
+  };
+  for (int i = 0; i < 3; i++) {
+    lv_obj_t *bd = lv_btn_create(drow); lv_obj_set_size(bd, 56, 60);
+    lv_obj_add_event_cb(bd, dparts[i].dn, LV_EVENT_CLICKED, NULL);
+    lv_obj_t *ld = lv_label_create(bd); lv_label_set_text(ld, "-");
+    lv_obj_set_style_text_font(ld, &lv_font_montserrat_28, 0); lv_obj_center(ld);
+
+    *dparts[i].lbl = lv_label_create(drow);
+    lv_label_set_text(*dparts[i].lbl, "1");
+    lv_obj_set_style_text_font(*dparts[i].lbl, &lv_font_montserrat_40, 0);
+    lv_obj_set_style_text_color(*dparts[i].lbl, lv_color_hex(SET_TEXT_COL), 0);
+
+    lv_obj_t *bu = lv_btn_create(drow); lv_obj_set_size(bu, 56, 60);
+    lv_obj_add_event_cb(bu, dparts[i].up, LV_EVENT_CLICKED, NULL);
+    lv_obj_t *lu = lv_label_create(bu); lv_label_set_text(lu, "+");
+    lv_obj_set_style_text_font(lu, &lv_font_montserrat_28, 0); lv_obj_center(lu);
+
+    lv_obj_t *cap = lv_label_create(drow);
+    lv_label_set_text(cap, dparts[i].cap);
+    lv_obj_set_style_text_font(cap, &lv_font_montserrat_20, 0);
+    lv_obj_set_style_text_color(cap, lv_color_hex(SET_TEXT_COL), 0);
+  }
+
+  // seed the date from the chip, so a correct clock is not overwritten by 1.1.00
+  if (haveDS3231) {
+    int d, m, y; ds3231GetDate(d, m, y);
+    if (d >= 1 && d <= 31 && m >= 1 && m <= 12) { setDay = d; setMon = m; setYear = y; }
+  }
+  refreshDateLabels();
+
+  lv_obj_t *setb = lv_btn_create(tClock); lv_obj_set_size(setb,300,64);
+  lv_obj_align(setb,LV_ALIGN_BOTTOM_MID,0,-14);
+  lv_obj_set_style_bg_color(setb,lv_color_hex(0x209040),0);
+  lv_obj_add_event_cb(setb,evSetTime,LV_EVENT_CLICKED,NULL);
+  lv_obj_t *sbl=lv_label_create(setb); lv_label_set_text(sbl,"Set time and date");
+  lv_obj_set_style_text_font(sbl,&lv_font_montserrat_28,0); lv_obj_center(sbl);
+
+  // ---- Display ----
+  lv_obj_t *fl=lv_label_create(tDisp); lv_label_set_text(fl,"Min brightness (night)");
+  lv_obj_set_style_text_font(fl,&lv_font_montserrat_20,0); lv_obj_align(fl,LV_ALIGN_TOP_LEFT,20,20);
+  lv_obj_t *sf=lv_slider_create(tDisp); lv_obj_set_size(sf,480,20);
+  lv_slider_set_range(sf,2,100); lv_slider_set_value(sf,brightFloor,LV_ANIM_OFF);   // TEST 080: was 30..100
+  lv_obj_align(sf,LV_ALIGN_TOP_LEFT,20,60);
+  lv_obj_add_event_cb(sf,evFloor,LV_EVENT_VALUE_CHANGED,NULL);
+  lblFloorVal=lv_label_create(tDisp); lv_label_set_text_fmt(lblFloorVal,"%d%%",brightFloor);
+  lv_obj_set_style_text_font(lblFloorVal,&lv_font_montserrat_20,0); lv_obj_align(lblFloorVal,LV_ALIGN_TOP_LEFT,520,55);
+  // TEST 080: the one that matters at night.
+  lv_obj_t *nl=lv_label_create(tDisp); lv_label_set_text(nl,"Night backlight (screensaver)");
+  lv_obj_set_style_text_font(nl,&lv_font_montserrat_20,0); lv_obj_align(nl,LV_ALIGN_TOP_LEFT,20,110);
+  lv_obj_t *sn=lv_slider_create(tDisp); lv_obj_set_size(sn,480,20);
+  lv_slider_set_range(sn,1,60); lv_slider_set_value(sn,saverFloor,LV_ANIM_OFF);
+  lv_obj_align(sn,LV_ALIGN_TOP_LEFT,20,150);
+  lv_obj_add_event_cb(sn,evNightFloor,LV_EVENT_VALUE_CHANGED,NULL);
+  lblNightVal=lv_label_create(tDisp); lv_label_set_text_fmt(lblNightVal,"%d%%",saverFloor);
+  lv_obj_set_style_text_font(lblNightVal,&lv_font_montserrat_20,0); lv_obj_align(lblNightVal,LV_ALIGN_TOP_LEFT,520,145);
+
+  lv_obj_t *tl=lv_label_create(tDisp); lv_label_set_text(tl,"Screensaver after");
+  lv_obj_set_style_text_font(tl,&lv_font_montserrat_20,0); lv_obj_align(tl,LV_ALIGN_TOP_LEFT,20,220);
+  ddSaver=lv_dropdown_create(tDisp); lv_dropdown_set_options(ddSaver,"30 sec\n1 min\n5 min\n10 min");
+  lv_obj_set_width(ddSaver,200); lv_obj_align(ddSaver,LV_ALIGN_TOP_LEFT,20,255);
+  { int sel=2; if(saverTimeoutMs==30000UL)sel=0; else if(saverTimeoutMs==60000UL)sel=1; else if(saverTimeoutMs==600000UL)sel=3; lv_dropdown_set_selected(ddSaver,sel);}
+  lv_obj_add_event_cb(ddSaver,evSaver,LV_EVENT_VALUE_CHANGED,NULL);
+
+  // ---- Massage ----
+  lv_obj_t *m1=lv_label_create(tMass); lv_label_set_text(m1,"Small motor threshold");
+  lv_obj_set_style_text_font(m1,&lv_font_montserrat_20,0); lv_obj_align(m1,LV_ALIGN_TOP_LEFT,20,15);
+  sldSmall=lv_slider_create(tMass); lv_obj_set_size(sldSmall,430,18);
+  lv_slider_set_range(sldSmall,30,140); lv_slider_set_value(sldSmall,setMinSmall,LV_ANIM_OFF);
+  lv_obj_align(sldSmall,LV_ALIGN_TOP_LEFT,20,50); lv_obj_add_event_cb(sldSmall,evSmall,LV_EVENT_VALUE_CHANGED,NULL);
+  lblSmall=lv_label_create(tMass); lv_label_set_text_fmt(lblSmall,"%d",setMinSmall);
+  lv_obj_set_style_text_font(lblSmall,&lv_font_montserrat_20,0); lv_obj_align(lblSmall,LV_ALIGN_TOP_LEFT,470,46);
+  lv_obj_t *m2=lv_label_create(tMass); lv_label_set_text(m2,"Big motor threshold");
+  lv_obj_set_style_text_font(m2,&lv_font_montserrat_20,0); lv_obj_align(m2,LV_ALIGN_TOP_LEFT,20,95);
+  sldBig=lv_slider_create(tMass); lv_obj_set_size(sldBig,430,18);
+  lv_slider_set_range(sldBig,100,230); lv_slider_set_value(sldBig,setMinBig,LV_ANIM_OFF);
+  lv_obj_align(sldBig,LV_ALIGN_TOP_LEFT,20,130); lv_obj_add_event_cb(sldBig,evBig,LV_EVENT_VALUE_CHANGED,NULL);
+  lblBig=lv_label_create(tMass); lv_label_set_text_fmt(lblBig,"%d",setMinBig);
+  lv_obj_set_style_text_font(lblBig,&lv_font_montserrat_20,0); lv_obj_align(lblBig,LV_ALIGN_TOP_LEFT,470,126);
+  lv_obj_t *m3=lv_label_create(tMass); lv_label_set_text(m3,"Random character");
+  lv_obj_set_style_text_font(m3,&lv_font_montserrat_20,0); lv_obj_align(m3,LV_ALIGN_TOP_LEFT,20,180);
+  ddRandom=lv_dropdown_create(tMass); lv_dropdown_set_options(ddRandom,"Gentle\nLively\nWild");
+  lv_obj_set_width(ddRandom,200); lv_obj_align(ddRandom,LV_ALIGN_TOP_LEFT,20,215);
+  lv_dropdown_set_selected(ddRandom,randomChar); lv_obj_add_event_cb(ddRandom,evRandom,LV_EVENT_VALUE_CHANGED,NULL);
+  lv_obj_t *mn=lv_label_create(tMass); lv_label_set_text(mn,"(applies to bed box when linked)");
+  lv_obj_set_style_text_font(mn,&lv_font_montserrat_20,0);
+  lv_obj_set_style_text_color(mn,lv_color_hex(SET_DIM_COL),0); lv_obj_align(mn,LV_ALIGN_TOP_LEFT,240,220);
+
+  // ---- Files ----
+  fileList = lv_list_create(tFiles);
+  lv_obj_set_size(fileList, 760, 290);
+  lv_obj_align(fileList, LV_ALIGN_TOP_MID, 0, 0);
+  // TEST 047: NOT populated here. Building ~42 list buttons at boot is what
+  // exhausted LVGL's heap and crashed. evSettingsTab fills it on demand.
+  lv_list_add_text(fileList, "Open this tab to list the card");
+
+  // TEST 041: slideshow of every photo in /photos, 2 s each, touch to stop
+  lv_obj_t *slb = lv_btn_create(tFiles);
+  lv_obj_set_size(slb, 320, 56);
+  lv_obj_align(slb, LV_ALIGN_BOTTOM_MID, 0, -6);
+  lv_obj_set_style_bg_color(slb, lv_color_hex(0x246080), 0);
+  lv_obj_add_event_cb(slb, evSlideshow, LV_EVENT_CLICKED, NULL);
+  lv_obj_t *sll = lv_label_create(slb);
+  lv_label_set_text(sll, LV_SYMBOL_IMAGE "  Slideshow (all photos)");
+  lv_obj_set_style_text_font(sll, &lv_font_montserrat_20, 0);
+  lv_obj_center(sll);
+
+  // ---- About ----
+  lblAbout=lv_label_create(tAbout);
+  lv_obj_set_style_text_font(lblAbout,&lv_font_montserrat_20,0);
+  lv_obj_set_style_text_color(lblAbout,lv_color_hex(SET_TEXT_COL),0);
+  lv_obj_align(lblAbout,LV_ALIGN_TOP_LEFT,30,20);
+  refreshAbout();
+
+  // blank screen used behind full-screen photo previews
+  scrBlank = lv_obj_create(NULL);
+  lv_obj_set_style_bg_color(scrBlank, lv_color_black(), 0);
+}
+
+// ============================================================
+//  TEST 069: the radio screen
+// ============================================================
+void refreshRadio() {
+  if (radioNowLbl) {
+    if (radioPlaying && radioStation >= 0 && radioStation < 8)
+      lv_label_set_text_fmt(radioNowLbl, "playing  %s", RADIO[radioStation].name);
+    else
+      lv_label_set_text(radioNowLbl, "stopped");
+  }
+  if (radioVolLbl) lv_label_set_text_fmt(radioVolLbl, "Volume  %d", radioVolume);
+  for (int i = 0; i < 8; i++) {
+    if (!radioBtn[i]) continue;
+    bool on = (radioPlaying && radioStation == i);
+    lv_obj_set_style_border_width(radioBtn[i], on ? 4 : 0, 0);
+    lv_obj_set_style_border_color(radioBtn[i], lv_color_white(), 0);
+    lv_obj_set_style_bg_opa(radioBtn[i], on ? LV_OPA_COVER : 200, 0);
+  }
+  refreshRadioTile();
+}
+
+static void evRadioPlay(lv_event_t *e) {
+  int n = (int)(intptr_t)lv_event_get_user_data(e);
+  radioStation = n;
+  radioPlaying = true;
+  sendMsg(NODE_AUDIO, CMD_RADIO_PLAY, (uint8_t)n, 0);
+  refreshRadio();
+}
+static void evRadioStop(lv_event_t *e) {
+  radioPlaying = false;
+  radioStation = -1;
+  sendMsg(NODE_AUDIO, CMD_RADIO_STOP, 0, 0);
+  refreshRadio();
+}
+static void evRadioVol(lv_event_t *e) {
+  lv_obj_t *s = lv_event_get_target(e);
+  radioVolume = lv_slider_get_value(s);
+  sendMsg(NODE_AUDIO, CMD_RADIO_VOL, 0, (uint8_t)radioVolume);
+  refreshRadio();
+}
+static void evRadioSleep(lv_event_t *e) {
+  sendMsg(NODE_AUDIO, CMD_RADIO_SLEEP, 0, 30);
+  Serial.println("radio: sleep timer 30 minutes");
+}
+
+void buildRadio() {
+  scrRadio = lv_obj_create(NULL);
+  lv_obj_set_style_bg_color(scrRadio, lv_color_hex(0x101418), 0);
+  lv_obj_clear_flag(scrRadio, LV_OBJ_FLAG_SCROLLABLE);
+
+  lv_obj_t *back = lv_btn_create(scrRadio);
+  lv_obj_set_size(back, 90, 50);
+  lv_obj_align(back, LV_ALIGN_TOP_LEFT, 10, 10);
+  lv_obj_set_style_bg_color(back, lv_color_hex(0x303840), 0);
+  lv_obj_add_event_cb(back, evGoHome, LV_EVENT_CLICKED, NULL);
+  lv_obj_t *bl = lv_label_create(back);
+  lv_label_set_text(bl, "<");
+  lv_obj_set_style_text_font(bl, &lv_font_montserrat_28, 0);
+  lv_obj_center(bl);
+
+  radioNowLbl = lv_label_create(scrRadio);
+  lv_label_set_text(radioNowLbl, "stopped");
+  lv_obj_set_style_text_font(radioNowLbl, &lv_font_montserrat_28, 0);
+  lv_obj_set_style_text_color(radioNowLbl, lv_color_hex(0x8FE0A0), 0);
+  lv_obj_align(radioNowLbl, LV_ALIGN_TOP_MID, 30, 22);
+
+  // eight station tiles, 4 across and 2 down
+  const int SW = 178, SH = 84, SX0 = 20, SGX = 14, SY0 = 92, SGY = 12;
+  for (int i = 0; i < 8; i++) {
+    int c = i % 4, r = i / 4;
+    lv_obj_t *b = lv_btn_create(scrRadio);
+    radioBtn[i] = b;
+    lv_obj_set_size(b, SW, SH);
+    lv_obj_set_pos(b, SX0 + c * (SW + SGX), SY0 + r * (SH + SGY));
+    lv_obj_set_style_bg_color(b, lv_color_hex(RADIO[i].colour), 0);
+    lv_obj_set_style_radius(b, 12, 0);
+    lv_obj_add_event_cb(b, evRadioPlay, LV_EVENT_CLICKED, (void *)(intptr_t)i);
+    lv_obj_t *l = lv_label_create(b);
+    lv_label_set_text(l, RADIO[i].name);
+    lv_obj_set_style_text_font(l, &lv_font_montserrat_20, 0);
+    lv_obj_set_style_text_color(l, lv_color_white(), 0);
+    lv_obj_center(l);
+  }
+
+  // volume
+  radioVolLbl = lv_label_create(scrRadio);
+  lv_label_set_text_fmt(radioVolLbl, "Volume  %d", radioVolume);
+  lv_obj_set_style_text_font(radioVolLbl, &lv_font_montserrat_20, 0);
+  lv_obj_set_style_text_color(radioVolLbl, lv_color_hex(0x90A0B0), 0);
+  lv_obj_set_pos(radioVolLbl, 22, 296);
+
+  lv_obj_t *sl = lv_slider_create(scrRadio);
+  lv_obj_set_size(sl, 470, 22);
+  lv_obj_set_pos(sl, 22, 326);
+  lv_slider_set_range(sl, 0, 21);
+  lv_slider_set_value(sl, radioVolume, LV_ANIM_OFF);
+  lv_obj_add_event_cb(sl, evRadioVol, LV_EVENT_VALUE_CHANGED, NULL);
+
+  // sleep and stop
+  lv_obj_t *sleepB = lv_btn_create(scrRadio);
+  lv_obj_set_size(sleepB, 150, 60);
+  lv_obj_set_pos(sleepB, 520, 306);
+  lv_obj_set_style_bg_color(sleepB, lv_color_hex(0x2A3346), 0);
+  lv_obj_add_event_cb(sleepB, evRadioSleep, LV_EVENT_CLICKED, NULL);
+  lv_obj_t *sll2 = lv_label_create(sleepB);
+  lv_label_set_text(sll2, "Sleep 30");
+  lv_obj_set_style_text_font(sll2, &lv_font_montserrat_20, 0);
+  lv_obj_center(sll2);
+
+  lv_obj_t *stopB = lv_btn_create(scrRadio);
+  lv_obj_set_size(stopB, 100, 60);
+  lv_obj_set_pos(stopB, 682, 306);
+  lv_obj_set_style_bg_color(stopB, lv_color_hex(0x8A3A3A), 0);
+  lv_obj_add_event_cb(stopB, evRadioStop, LV_EVENT_CLICKED, NULL);
+  lv_obj_t *stl = lv_label_create(stopB);
+  lv_label_set_text(stl, "Stop");
+  lv_obj_set_style_text_font(stl, &lv_font_montserrat_20, 0);
+  lv_obj_center(stl);
+
+  // Spotify - honest about not being connected
+  lv_obj_t *sp = lv_label_create(scrRadio);
+  lv_label_set_text(sp, "Spotify: not connected - needs cspot on the audio node");
+  lv_obj_set_style_text_font(sp, &lv_font_montserrat_20, 0);
+  lv_obj_set_style_text_color(sp, lv_color_hex(0x556070), 0);
+  lv_obj_align(sp, LV_ALIGN_BOTTOM_MID, 0, -34);
+
+  lv_obj_t *nb = lv_label_create(scrRadio);
+  lv_label_set_text(nb, "nothing plays yet - the audio node is not built");
+  lv_obj_set_style_text_font(nb, &lv_font_montserrat_20, 0);
+  lv_obj_set_style_text_color(nb, lv_color_hex(0x556070), 0);
+  lv_obj_align(nb, LV_ALIGN_BOTTOM_MID, 0, -10);
+
+  refreshRadio();
+}
+
+// ============================================================
+//  TEST 063: AC screen - drives the Switcher Breeze
+// ============================================================
+static const char *AC_MODE_NAME[5] = { "Cool", "Heat", "Dry", "Fan", "Auto" };
+static const char *AC_FAN_NAME[4]  = { "Low", "Med", "High", "Auto" };
+
+void refreshAC() {
+  if (acLblTemp)
+    lv_label_set_text_fmt(acLblTemp, "%d", acTemp);
+  if (acLblPower) {
+    lv_label_set_text(acLblPower, acPower ? "ON" : "OFF");
+    lv_obj_set_style_text_color(acLblPower,
+      lv_color_hex(acPower ? 0x40E080 : 0x808890), 0);
+  }
+  if (acLblRoom) {
+    // TEST 074: whole degrees, to match the big target number
+    if (tempOK) lv_label_set_text_fmt(acLblRoom, "%d", (int)lroundf(gTemp));
+    else        lv_label_set_text(acLblRoom, "--");
+  }
+  for (int i = 0; i < 5; i++) if (acModeBtn[i])
+    lv_obj_set_style_bg_color(acModeBtn[i],
+      lv_color_hex(i == acMode ? 0x2080FF : 0x2A3346), 0);
+  for (int i = 0; i < 4; i++) if (acFanBtn[i])
+    lv_obj_set_style_bg_color(acFanBtn[i],
+      lv_color_hex(i == acFan ? 0x2080FF : 0x2A3346), 0);
+  if (acSwingBtn)
+    lv_obj_set_style_bg_color(acSwingBtn,
+      lv_color_hex(acSwing ? 0x2E6F4E : 0x2A3346), 0);
+}
+
+static void evAcPower(lv_event_t *e) {
+  acPower = !acPower;
+  sendMsg(NODE_AUDIO, CMD_AC_POWER, 0, acPower ? 1 : 0);
+  refreshAC();
+}
+static void evAcTemp(lv_event_t *e) {
+  int delta = (int)(intptr_t)lv_event_get_user_data(e);
+  acTemp += delta;
+  if (acTemp < AC_TEMP_MIN) acTemp = AC_TEMP_MIN;
+  if (acTemp > AC_TEMP_MAX) acTemp = AC_TEMP_MAX;
+  sendMsg(NODE_AUDIO, CMD_AC_TEMP, 0, (uint8_t)acTemp);
+  refreshAC();
+}
+static void evAcMode(lv_event_t *e) {
+  acMode = (int)(intptr_t)lv_event_get_user_data(e);
+  sendMsg(NODE_AUDIO, CMD_AC_MODE, 0, (uint8_t)acMode);
+  refreshAC();
+}
+static void evAcFan(lv_event_t *e) {
+  acFan = (int)(intptr_t)lv_event_get_user_data(e);
+  sendMsg(NODE_AUDIO, CMD_AC_FAN, 0, (uint8_t)acFan);
+  refreshAC();
+}
+static void evAcSwing(lv_event_t *e) {
+  acSwing = !acSwing;
+  sendMsg(NODE_AUDIO, CMD_AC_SWING, 0, acSwing ? 1 : 0);
+  refreshAC();
+}
+
+static lv_obj_t *mkBtn(lv_obj_t *par, int x, int y, int w, int h,
+                       const char *text, lv_event_cb_t cb, int userData,
+                       const lv_font_t *font) {
+  lv_obj_t *b = lv_btn_create(par);
+  lv_obj_set_size(b, w, h);
+  lv_obj_set_pos(b, x, y);
+  lv_obj_set_style_bg_color(b, lv_color_hex(0x2A3346), 0);
+  lv_obj_set_style_radius(b, 10, 0);
+  lv_obj_add_event_cb(b, cb, LV_EVENT_CLICKED, (void *)(intptr_t)userData);
+  lv_obj_t *l = lv_label_create(b);
+  lv_label_set_text(l, text);
+  lv_obj_set_style_text_font(l, font, 0);
+  lv_obj_set_style_text_color(l, lv_color_white(), 0);
+  lv_obj_center(l);
+  return b;
+}
+
+void buildAC() {
+  scrAC = lv_obj_create(NULL);
+  lv_obj_set_style_bg_color(scrAC, lv_color_hex(0x101418), 0);
+  lv_obj_clear_flag(scrAC, LV_OBJ_FLAG_SCROLLABLE);
+
+  lv_obj_t *back = lv_btn_create(scrAC);
+  lv_obj_set_size(back, 90, 50);
+  lv_obj_align(back, LV_ALIGN_TOP_LEFT, 10, 10);
+  lv_obj_set_style_bg_color(back, lv_color_hex(0x303840), 0);
+  lv_obj_add_event_cb(back, evGoHome, LV_EVENT_CLICKED, NULL);
+  lv_obj_t *bl = lv_label_create(back);
+  lv_label_set_text(bl, "<");
+  lv_obj_set_style_text_font(bl, &lv_font_montserrat_28, 0);
+  lv_obj_center(bl);
+
+  lv_obj_t *ttl = lv_label_create(scrAC);
+  lv_label_set_text(ttl, "Air Conditioner");
+  lv_obj_set_style_text_font(ttl, &lv_font_montserrat_28, 0);
+  lv_obj_set_style_text_color(ttl, lv_color_white(), 0);
+  lv_obj_align(ttl, LV_ALIGN_TOP_MID, 0, 20);
+
+  // power, top right
+  lv_obj_t *pw = lv_btn_create(scrAC);
+  lv_obj_set_size(pw, 130, 50);
+  lv_obj_align(pw, LV_ALIGN_TOP_RIGHT, -14, 10);
+  lv_obj_set_style_bg_color(pw, lv_color_hex(0x303840), 0);
+  lv_obj_add_event_cb(pw, evAcPower, LV_EVENT_CLICKED, NULL);
+  acLblPower = lv_label_create(pw);
+  lv_label_set_text(acLblPower, "OFF");
+  lv_obj_set_style_text_font(acLblPower, &lv_font_montserrat_28, 0);
+  lv_obj_center(acLblPower);
+
+  // big target temperature with - and +
+  mkBtn(scrAC, 120, 90, 90, 90, "-", evAcTemp, -1, &lv_font_montserrat_40);
+  mkBtn(scrAC, 400, 90, 90, 90, "+", evAcTemp, +1, &lv_font_montserrat_40);
+
+  acLblTemp = lv_label_create(scrAC);
+  lv_label_set_text_fmt(acLblTemp, "%d", acTemp);
+  lv_obj_set_style_text_font(acLblTemp, &lv_font_montserrat_40, 0);
+  lv_obj_set_style_text_color(acLblTemp, lv_color_hex(0x60D0FF), 0);
+  lv_obj_set_pos(acLblTemp, 275, 110);
+
+  lv_obj_t *cu = lv_label_create(scrAC);
+  lv_label_set_text(cu, "C");
+  lv_obj_set_style_text_font(cu, &lv_font_montserrat_28, 0);
+  lv_obj_set_style_text_color(cu, lv_color_hex(0x60D0FF), 0);
+  lv_obj_set_pos(cu, 340, 120);
+
+  // TEST 074: the room temperature, to the RIGHT OF THE + BUTTON.
+  // The + sits at x 400..490, so this starts at 530.
+  lv_obj_t *roomCap = lv_label_create(scrAC);
+  lv_label_set_text(roomCap, "room");
+  lv_obj_set_style_text_font(roomCap, &lv_font_montserrat_20, 0);
+  lv_obj_set_style_text_color(roomCap, lv_color_hex(0x7B90A0), 0);
+  lv_obj_set_pos(roomCap, 546, 86);
+
+  acLblRoom = lv_label_create(scrAC);
+  lv_label_set_text(acLblRoom, "--");
+  lv_obj_set_style_text_font(acLblRoom, &lv_font_montserrat_40, 0);
+  lv_obj_set_style_text_color(acLblRoom, lv_color_hex(0x8FE0A0), 0);
+  lv_obj_set_pos(acLblRoom, 546, 112);
+
+  lv_obj_t *roomC = lv_label_create(scrAC);
+  lv_label_set_text(roomC, "c");
+  lv_obj_set_style_text_font(roomC, &lv_font_montserrat_20, 0);
+  lv_obj_set_style_text_color(roomC, lv_color_hex(0x8FE0A0), 0);
+  lv_obj_set_pos(roomC, 630, 140);
+
+  lv_obj_t *roomNote = lv_label_create(scrAC);
+  lv_label_set_text(roomNote, "measured here");
+  lv_obj_set_style_text_font(roomNote, &lv_font_montserrat_20, 0);
+  lv_obj_set_style_text_color(roomNote, lv_color_hex(0x556070), 0);
+  lv_obj_set_pos(roomNote, 546, 168);
+
+  // mode row
+  lv_obj_t *ml = lv_label_create(scrAC);
+  lv_label_set_text(ml, "Mode");
+  lv_obj_set_style_text_font(ml, &lv_font_montserrat_20, 0);
+  lv_obj_set_style_text_color(ml, lv_color_hex(0x7B90A0), 0);
+  lv_obj_set_pos(ml, 20, 205);
+  for (int i = 0; i < 5; i++)
+    acModeBtn[i] = mkBtn(scrAC, 100 + i * 138, 195, 128, 58,
+                         AC_MODE_NAME[i], evAcMode, i, &lv_font_montserrat_20);
+
+  // fan row
+  lv_obj_t *fl = lv_label_create(scrAC);
+  lv_label_set_text(fl, "Fan");
+  lv_obj_set_style_text_font(fl, &lv_font_montserrat_20, 0);
+  lv_obj_set_style_text_color(fl, lv_color_hex(0x7B90A0), 0);
+  lv_obj_set_pos(fl, 20, 285);
+  for (int i = 0; i < 4; i++)
+    acFanBtn[i] = mkBtn(scrAC, 100 + i * 138, 275, 128, 58,
+                        AC_FAN_NAME[i], evAcFan, i, &lv_font_montserrat_20);
+
+  // swing
+  lv_obj_t *sl = lv_label_create(scrAC);
+  lv_label_set_text(sl, "Swing");
+  lv_obj_set_style_text_font(sl, &lv_font_montserrat_20, 0);
+  lv_obj_set_style_text_color(sl, lv_color_hex(0x7B90A0), 0);
+  lv_obj_set_pos(sl, 20, 365);
+  acSwingBtn = mkBtn(scrAC, 100, 355, 128, 58, "Swing",
+                     evAcSwing, 0, &lv_font_montserrat_20);
+
+  lv_obj_t *note = lv_label_create(scrAC);
+  lv_label_set_text(note, "shows what was last commanded - this AC does not report back");
+  lv_obj_set_style_text_font(note, &lv_font_montserrat_20, 0);
+  lv_obj_set_style_text_color(note, lv_color_hex(0x556070), 0);
+  lv_obj_align(note, LV_ALIGN_BOTTOM_MID, 0, -8);
+
+  refreshAC();
+}
+
+// ============================================================
+//  TEST 063: Room screen - shades and light over 433 MHz
+// ============================================================
+void refreshRoom() {
+  if (shadeLbl) {
+    if (shadeMoving == 1)      lv_label_set_text(shadeLbl, "going up - press again to stop");
+    else if (shadeMoving == 2) lv_label_set_text(shadeLbl, "going down - press again to stop");
+    else                       lv_label_set_text(shadeLbl, "stopped");
+  }
+  if (shadeUpBtn)
+    lv_obj_set_style_bg_color(shadeUpBtn,
+      lv_color_hex(shadeMoving == 1 ? 0x2080FF : 0x2A3346), 0);
+  if (shadeDownBtn)
+    lv_obj_set_style_bg_color(shadeDownBtn,
+      lv_color_hex(shadeMoving == 2 ? 0x2080FF : 0x2A3346), 0);
+  if (lightBtn)
+    lv_obj_set_style_bg_color(lightBtn,
+      lv_color_hex(lightOn ? 0xE0A020 : 0x2A3346), 0);
+  if (lightLbl)
+    lv_label_set_text(lightLbl, lightOn ? "Light ON" : "Light OFF");
+}
+
+static void evShade(lv_event_t *e) {
+  int want = (int)(intptr_t)lv_event_get_user_data(e);   // 1 up, 2 down
+  if (shadeMoving != 0) {
+    // already moving - this press means STOP, whichever button it was
+    sendMsg(NODE_AUDIO, CMD_RF, 0, 0);
+    shadeMoving = 0;
+  } else {
+    sendMsg(NODE_AUDIO, CMD_RF, 0, (uint8_t)want);
+    shadeMoving = want;
+    shadeStartMs = millis();
+  }
+  refreshRoom();
+}
+
+static void evLight(lv_event_t *e) {
+  lightOn = !lightOn;
+  sendMsg(NODE_AUDIO, CMD_RF, 1, lightOn ? 1 : 0);
+  refreshRoom();
+}
+
+void buildRoom() {
+  scrRoom = lv_obj_create(NULL);
+  lv_obj_set_style_bg_color(scrRoom, lv_color_hex(0x101418), 0);
+  lv_obj_clear_flag(scrRoom, LV_OBJ_FLAG_SCROLLABLE);
+
+  lv_obj_t *back = lv_btn_create(scrRoom);
+  lv_obj_set_size(back, 90, 50);
+  lv_obj_align(back, LV_ALIGN_TOP_LEFT, 10, 10);
+  lv_obj_set_style_bg_color(back, lv_color_hex(0x303840), 0);
+  lv_obj_add_event_cb(back, evGoHome, LV_EVENT_CLICKED, NULL);
+  lv_obj_t *bl = lv_label_create(back);
+  lv_label_set_text(bl, "<");
+  lv_obj_set_style_text_font(bl, &lv_font_montserrat_28, 0);
+  lv_obj_center(bl);
+
+  lv_obj_t *ttl = lv_label_create(scrRoom);
+  lv_label_set_text(ttl, "Room");
+  lv_obj_set_style_text_font(ttl, &lv_font_montserrat_28, 0);
+  lv_obj_set_style_text_color(ttl, lv_color_white(), 0);
+  lv_obj_align(ttl, LV_ALIGN_TOP_MID, 0, 20);
+
+  lv_obj_t *sh = lv_label_create(scrRoom);
+  lv_label_set_text(sh, "Shades");
+  lv_obj_set_style_text_font(sh, &lv_font_montserrat_28, 0);
+  lv_obj_set_style_text_color(sh, lv_color_hex(0x7B90A0), 0);
+  lv_obj_set_pos(sh, 60, 100);
+
+  shadeUpBtn   = mkBtn(scrRoom, 60,  150, 180, 130, LV_SYMBOL_UP,
+                       evShade, 1, &lv_font_montserrat_40);
+  shadeDownBtn = mkBtn(scrRoom, 260, 150, 180, 130, LV_SYMBOL_DOWN,
+                       evShade, 2, &lv_font_montserrat_40);
+
+  shadeLbl = lv_label_create(scrRoom);
+  lv_label_set_text(shadeLbl, "stopped");
+  lv_obj_set_style_text_font(shadeLbl, &lv_font_montserrat_20, 0);
+  lv_obj_set_style_text_color(shadeLbl, lv_color_hex(0x8FE0A0), 0);
+  lv_obj_set_pos(shadeLbl, 60, 295);
+
+  lv_obj_t *li = lv_label_create(scrRoom);
+  lv_label_set_text(li, "Light");
+  lv_obj_set_style_text_font(li, &lv_font_montserrat_28, 0);
+  lv_obj_set_style_text_color(li, lv_color_hex(0x7B90A0), 0);
+  lv_obj_set_pos(li, 530, 100);
+
+  lightBtn = lv_btn_create(scrRoom);
+  lv_obj_set_size(lightBtn, 210, 130);
+  lv_obj_set_pos(lightBtn, 530, 150);
+  lv_obj_set_style_bg_color(lightBtn, lv_color_hex(0x2A3346), 0);
+  lv_obj_set_style_radius(lightBtn, 10, 0);
+  lv_obj_add_event_cb(lightBtn, evLight, LV_EVENT_CLICKED, NULL);
+  lightLbl = lv_label_create(lightBtn);
+  lv_label_set_text(lightLbl, "Light OFF");
+  lv_obj_set_style_text_font(lightLbl, &lv_font_montserrat_28, 0);
+  lv_obj_set_style_text_color(lightLbl, lv_color_white(), 0);
+  lv_obj_center(lightLbl);
+
+  lv_obj_t *note = lv_label_create(scrRoom);
+  lv_label_set_text(note, "433 MHz - one way, so the panel shows what it commanded");
+  lv_obj_set_style_text_font(note, &lv_font_montserrat_20, 0);
+  lv_obj_set_style_text_color(note, lv_color_hex(0x556070), 0);
+  lv_obj_align(note, LV_ALIGN_BOTTOM_MID, 0, -8);
+
+  refreshRoom();
+}
+
+
+// ============================================================
+//  Settings persistence (flash)
+// ============================================================
+void loadSettings() {
+  prefs.begin("panel", true);
+  brightFloor    = prefs.getInt("bfloor", 40);      // TEST 080: was 85
+  saverFloor     = prefs.getInt("nfloor", 4);       // TEST 080
+  saverTimeoutMs = prefs.getUInt("saver", 300000UL);
+  setMinSmall    = prefs.getInt("dsmall", 60);
+  setMinBig      = prefs.getInt("dbig", 165);
+  randomChar     = prefs.getInt("rchar", 1);
+  prefs.end();
+}
+void saveSettings() {
+  prefs.begin("panel", false);
+  prefs.putInt("bfloor", brightFloor);
+  prefs.putInt("nfloor", saverFloor);
+  prefs.putUInt("saver", saverTimeoutMs);
+  prefs.putInt("dsmall", setMinSmall);
+  prefs.putInt("dbig", setMinBig);
+  prefs.putInt("rchar", randomChar);
+  prefs.end();
+}
+
+void updateSensorLabel() {
+  if (!lblSensors) return;                        // TEST 044 guard
+
+  // TEST 062: the reference is taken on the FIRST reading, the window is
+  // 10 minutes and the threshold 0.1 hPa. The old code only ever updated
+  // the trend inside a 30-minute gate, so a dash was all you ever saw.
+  if (pressOK && gPress > 0) {
+    if (pressRef == 0) { pressRef = gPress; pressRefMs = millis(); }
+    if (millis() - pressRefMs > PRESS_WINDOW_MS) {
+      if (gPress > pressRef + PRESS_DELTA)      pressTrend =  1;
+      else if (gPress < pressRef - PRESS_DELTA) pressTrend = -1;
+      else                                      pressTrend =  0;
+      pressRef = gPress; pressRefMs = millis();
+    }
+  }
+  // TEST 068: the home screen shows the TIME and the TEMPERATURE and
+  // nothing else. Pressure, its trend arrow, humidity and the degree
+  // letter are gone from here - all still measured, all still on the
+  // About tab and on serial.
+  long sod = nowSecOfDay();
+  int hh = (int)((sod / 3600) % 24);
+  int mm = (int)((sod / 60) % 60);
+
+  char line[48];
+  if (tempOK)
+    snprintf(line, sizeof(line), "%02d:%02d    %.0f", hh, mm, gTemp);
+  else
+    snprintf(line, sizeof(line), "%02d:%02d    --", hh, mm);
+  lv_label_set_text(lblSensors, line);
+}
+
+
+// ============================================================
+//  Clock (kept by millis since last 'time HH:MM' command)
+// ============================================================
+bool timeSet = false;
+uint32_t baseMillis = 0;
+long baseSecOfDay = 0;
+int shownMin = -1;
+
+uint8_t bcd2dec(uint8_t b) { return (b >> 4) * 10 + (b & 0x0F); }
+uint8_t dec2bcd(uint8_t d) { return ((d / 10) << 4) | (d % 10); }
+
+bool ds3231Present() {
+  Wire.beginTransmission(DS3231_ADDR);
+  return Wire.endTransmission() == 0;
+}
+long ds3231SecOfDay() {
+  Wire.beginTransmission(DS3231_ADDR);
+  Wire.write(0x00);
+  if (Wire.endTransmission(false) != 0) return -1;
+  if (Wire.requestFrom(DS3231_ADDR, 3) != 3) return -1;
+  uint8_t ss = bcd2dec(Wire.read() & 0x7F);
+  uint8_t mm = bcd2dec(Wire.read() & 0x7F);
+  uint8_t hh = bcd2dec(Wire.read() & 0x3F);
+  return (long)hh * 3600 + (long)mm * 60 + ss;
+}
+void ds3231SetHM(int hh, int mm) {
+  Wire.beginTransmission(DS3231_ADDR);
+  Wire.write(0x00);
+  Wire.write(dec2bcd(0));      // seconds = 0
+  Wire.write(dec2bcd(mm));
+  Wire.write(dec2bcd(hh));
+  Wire.endTransmission();
+}
+
+long nowSecOfDay() {
+  if (haveDS3231) return ds3231SecOfDay();
+  if (!timeSet) return -1;
+  return (baseSecOfDay + (long)((millis() - baseMillis) / 1000UL)) % 86400L;
+}
+
+// ---- 7-segment digit renderer ----
+// segments: bit0=A top,1=B tr,2=C br,3=D bottom,4=E bl,5=F tl,6=G mid
+const uint8_t SEGMAP[10] = {0x3F,0x06,0x5B,0x4F,0x66,0x6D,0x7D,0x07,0x7F,0x6F};
+void drawSeg(int x,int y,int w,int h,int t,uint8_t segs,uint16_t on,uint16_t off){
+  // A
+  gfx->fillRect(x+t, y, w-2*t, t, (segs&0x01)?on:off);
+  // B
+  gfx->fillRect(x+w-t, y+t, t, h/2-t, (segs&0x02)?on:off);
+  // C
+  gfx->fillRect(x+w-t, y+h/2, t, h/2-t, (segs&0x04)?on:off);
+  // D
+  gfx->fillRect(x+t, y+h-t, w-2*t, t, (segs&0x08)?on:off);
+  // E
+  gfx->fillRect(x, y+h/2, t, h/2-t, (segs&0x10)?on:off);
+  // F
+  gfx->fillRect(x, y+t, t, h/2-t, (segs&0x20)?on:off);
+  // G
+  gfx->fillRect(x+t, y+h/2-t/2, w-2*t, t, (segs&0x40)?on:off);
+}
+
+const int DG_W=130, DG_H=300, DG_T=26, DG_GAP=28, COLON_W=50;
+const uint16_t CLK_ON=0x07FF, CLK_OFF=0x0000;   // cyan on black
+
+void drawClockDigits() {
+  long s = nowSecOfDay();
+  int totalW = 4*DG_W + 3*DG_GAP + COLON_W;
+  int x0 = (SCREEN_W - totalW)/2;
+  int y0 = (SCREEN_H - DG_H)/2 + 10;
+  int hh = -1, mm = -1;
+  bool pm = false;
+  if (s >= 0) {                                    // TEST 042: 12-hour
+    int h24 = (int)(s/3600);
+    pm = (h24 >= 12);
+    hh = h24 % 12; if (hh == 0) hh = 12;
+    mm = (s/60)%60;
+  }
+  int d[4];
+  if (s >= 0) { d[0]=hh/10; d[1]=hh%10; d[2]=mm/10; d[3]=mm%10; }
+  int x = x0;
+  for (int i=0;i<4;i++){
+    uint8_t segs = (s>=0) ? SEGMAP[d[i]] : 0x40;   // '-' if unset
+    if (s>=0 && i==0 && d[0]==0) segs = 0x00;      // blank the leading zero
+    drawSeg(x, y0, DG_W, DG_H, DG_T, segs, CLK_ON, CLK_OFF);
+    x += DG_W + DG_GAP;
+    if (i==1) x += COLON_W;
+  }
+}
+void drawClockAmPm(){                              // TEST 042
+  long s = nowSecOfDay();
+  if (s < 0) return;
+  int totalW = 4*DG_W + 3*DG_GAP + COLON_W;
+  int x0 = (SCREEN_W - totalW)/2;
+  int y0 = (SCREEN_H - DG_H)/2 + 10;
+  gfx->setTextColor(CLK_ON); gfx->setTextSize(4);
+  gfx->setCursor(x0 + totalW + 16, y0 + DG_H - 40);
+  gfx->print(((s/3600) >= 12) ? "PM" : "AM");
+}
+void drawColon(bool on){
+  int totalW = 4*DG_W + 3*DG_GAP + COLON_W;
+  int x0 = (SCREEN_W - totalW)/2;
+  int cx = x0 + 2*DG_W + DG_GAP + DG_GAP/2 + COLON_W/2;
+  int y0 = (SCREEN_H - DG_H)/2 + 10;
+  uint16_t c = on ? CLK_ON : CLK_OFF;
+  gfx->fillCircle(cx, y0 + DG_H/3, 16, c);
+  gfx->fillCircle(cx, y0 + 2*DG_H/3, 16, c);
+}
+void drawSaverTemp(){
+  gfx->fillRect(SCREEN_W-260, 0, 260, 80, BLACK);
+  if (tempOK) {
+    char v[16]; snprintf(v, sizeof(v), "%dC", (int)lroundf(gTemp));
+    gfx->setTextColor(0x7BEF); gfx->setTextSize(8);   // ~0.75cm digits
+    gfx->setCursor(SCREEN_W-250, 8); gfx->print(v);
+  }
+}
+void drawClockScreen(){
+  gfx->fillScreen(BLACK);
+  drawClockDigits();
+  drawColon(true);
+  drawClockAmPm();
+  drawSaverTemp();
+  if (!timeSet) {
+    gfx->setTextColor(0x7BEF); gfx->setTextSize(2);
+    gfx->setCursor(160, SCREEN_H-30);
+    gfx->print("Set time: type  time HH:MM  in Serial Monitor");
+  }
+  shownMin = (nowSecOfDay()>=0) ? (int)((nowSecOfDay()/60)%60) : -2;
+}
+
+// ---- serial console: time HH:MM ----
+String conBuf;
+void pollSerialCommands(){
+  while (Serial.available()){
+    char c = Serial.read();
+    // TEST 059: CR *or* LF ends a line. Only '\n' was accepted before,
+    // and the PlatformIO monitor sends CR - which is why `ref` never ran.
+    if (c=='\n' || c=='\r'){
+      conBuf.trim();
+      if (conBuf.length()==0){ /* bare CRLF, nothing typed */ }
+      else if (conBuf.startsWith("time ")){
+        int hh, mm;
+        if (sscanf(conBuf.c_str()+5, "%d:%d", &hh, &mm)==2 && hh>=0 && hh<24 && mm>=0 && mm<60){
+          baseSecOfDay = (long)hh*3600 + (long)mm*60;
+          baseMillis = millis();
+          timeSet = true;
+          if (haveDS3231) { ds3231SetHM(hh, mm); Serial.printf("DS3231 + clock set to %02d:%02d\n", hh, mm); }
+          else Serial.printf("clock set to %02d:%02d (no DS3231; will reset on power-off)\n", hh, mm);
+          if (state == ST_SAVER) drawDiverClock(true);
+        } else Serial.println("usage: time HH:MM");
+      }
+      else if (conBuf.startsWith("date ")){
+        int dd, mo, yy;
+        if (sscanf(conBuf.c_str()+5, "%d %d %d", &dd, &mo, &yy)==3 &&
+            dd>=1 && dd<=31 && mo>=1 && mo<=12 && yy>=0 && yy<=99){
+          if (haveDS3231){ ds3231SetDate(dd, mo, yy);
+            Serial.printf("DS3231 date set to %d.%d.%02d\n", dd, mo, yy); }
+          else Serial.println("no DS3231 - nowhere to keep a date");
+        } else Serial.println("usage: date DD MM YY");
+      }
+      else if (conBuf == "dump") uttDump();
+      else if (conBuf.startsWith("th ")) {
+        float v = atof(conBuf.c_str() + 3);
+        if (v > 0.5f && v < 100.0f) {
+          wakeThreshold = v;
+          Serial.printf("threshold set to %.2f\n", wakeThreshold);
+        } else Serial.println("usage: th 10.5");
+      }
+      else if (conBuf == "ref")      learnReference();
+      else if (conBuf == "refclear") clearReferences();
+      else if (conBuf == "trend") {
+        // TEST 062: force a trend recalculation instead of waiting
+        if (pressRef == 0) Serial.println("trend: no reference yet");
+        else {
+          float d = gPress - pressRef;
+          pressTrend = (d > PRESS_DELTA) ? 1 : (d < -PRESS_DELTA) ? -1 : 0;
+          Serial.printf("trend: now %.1f, ref %.1f, delta %+.2f hPa -> %s\n",
+                        gPress, pressRef, d,
+                        pressTrend > 0 ? "rising" : pressTrend < 0 ? "falling" : "steady");
+          pressRef = gPress; pressRefMs = millis();
+        }
+        updateSensorLabel();
+      }
+      else if (conBuf == "sensors") {
+        Serial.printf("BH1750 %s   SHT31 %s   BMP280 %s   DS3231 %s\n",
+                      haveBH1750 ? "ok" : "--", haveSHT31 ? "ok" : "--",
+                      haveBME280 ? "ok" : "--", haveDS3231 ? "ok" : "--");
+        Serial.printf("  temp %.2f C  humidity %.1f %%  pressure %.2f hPa  lux %.0f\n",
+                      gTemp, gHum, gPress, gLux);
+      }
+      else if (conBuf == "dsp") {
+        Serial.printf("dsp: %s  last word %d frames, %d/%d references (",
+                      dspReady ? "ready" : "not ready", curFrames, refCount, REF_SLOTS);
+        for (int i = 0; i < REF_SLOTS; i++) Serial.printf(" %d", refFrames[i]);
+        for (int i = 0; i < REF_SLOTS; i++) Serial.printf(" %ums", (unsigned)refMs[i]);
+        Serial.printf(" ), last dtw %.3f, threshold %.2f, wakes %u\n",
+                      lastDist, wakeThreshold, (unsigned)wakeCount);
+      }
+      else if (conBuf == "mic") {
+        Serial.printf("mic: rms %.4f  peak %.4f  floor %.4f  start %.4f  words %u\n",
+                      micRms, micPeak, micFloor,
+                      fmaxf(micFloor * UTT_START_MULT, UTT_ABS_FLOOR),
+                      (unsigned)uttCount);
+        // TEST 057: spread of the recent words - the number that decides
+        // whether template matching is worth trying
+        uint8_t n = (uttHistN < UTT_HISTORY) ? uttHistN : UTT_HISTORY;
+        if (n >= 2) {
+          uint32_t lo = 0xFFFFFFFF, hi = 0, sum = 0;
+          for (uint8_t i = 0; i < n; i++) {
+            uint32_t v = uttHist[i];
+            if (v < lo) lo = v;
+            if (v > hi) hi = v;
+            sum += v;
+          }
+          Serial.printf("     last %u words: min %u  max %u  mean %u ms  spread %.2fx\n",
+                        n, (unsigned)lo, (unsigned)hi, (unsigned)(sum / n),
+                        lo ? (float)hi / (float)lo : 0.0f);
+        }
+      }
+      else Serial.printf("unknown command '%s' - try: "
+                         "time HH:MM, mic, dsp, ref, refclear, dump\n",
+                         conBuf.c_str());
+      conBuf = "";
+    } else conBuf += c;
+  }
+}
+
+// ============================================================
+//  Screensaver enter/exit around LVGL
+// ============================================================
+void enterSaver() {
+  state = ST_SAVER;
+  lv_scr_load(scrBlank);      // hide LVGL widgets
+  lv_refr_now(NULL);
+  drawDiverClock(true);       // TEST 055: full paint on entry
+}
+void exitSaver() {
+  state = ST_UI;
+  lastTouchMs = millis();
+  lv_scr_load(scrHome);
+  lv_refr_now(NULL);
+}
+
+// ============================================================
+void setup() {
+  Serial.begin(115200); delay(300);
+  Serial.printf("=== PANEL — TEST %03d — LVGL UI + Settings ===\n", TEST_NUMBER);
+  loadSettings();
+
+  Serial1.begin(115200, SERIAL_8N1, BB_RX, BB_TX);   // UART to bed box
+
+  Wire.begin(TOUCH_SDA, TOUCH_SCL); Wire.setClock(400000);
+  if (!gfx->begin()) Serial.println("gfx->begin FAILED");
+  gfx->fillScreen(BLACK);
+  setupBacklight();
+
+  // TEST 081: whose panel is this. Before anything else touches the
+  // screen, so it is the first thing you see and the first line on
+  // serial that tells you the flash went to the right board.
+  if (showBootPhoto()) delay(BOOT_PHOTO_MS);
+
+  bool sd = false;
+#if ENABLE_SD
+  SPI.begin(SD_CLK, SD_MISO, SD_MOSI, SD_CS);
+  sd = SD.begin(SD_CS, SPI);
+  if (sd && showPhoto(WELCOME_FILE)) delay(WELCOME_MS);
+  if (sd) scanPhotos();
+  if (sd) { File df=SD.open(DIAL_FILE); haveDial = (bool)df; if(df) df.close(); }
+  Serial.printf("dial: haveDial=%s\n", haveDial ? "yes" : "NO");
+#else
+  // TEST 053: SPI is never started. GPIO 11/12/13 stay free for the
+  // microphone, and the SD card is never selected.
+  Serial.println("SD: disabled - GPIO 11/12/13 belong to the I2S microphone");
+  (void)sd;
+#endif
+  cacheDial();                       // TEST 046: decode once, reuse forever
+  micBegin();                        // TEST 054: microphone
+
+  dspInit();                         // TEST 058: MFCC tables + buffers
+
+  // TEST 056: utterance buffer, 2 s at 16 kHz
+  uttBuf = (int16_t *)ps_malloc((size_t)UTT_BUF_SAMPLES * sizeof(int16_t));
+  preBuf = (int16_t *)ps_malloc((size_t)PRE_ROLL_SAMPLES * sizeof(int16_t));
+  Serial.printf("utt buffer: %s (%u bytes)  pre-roll: %s (%u bytes)\n",
+                uttBuf ? "ok" : "FAILED",
+                (unsigned)((size_t)UTT_BUF_SAMPLES * sizeof(int16_t)),
+                preBuf ? "ok" : "FAILED",
+                (unsigned)((size_t)PRE_ROLL_SAMPLES * sizeof(int16_t)));
+
+  // TEST 055: off-screen compose buffer for a flicker-free screensaver
+  clockBuf = (uint16_t *)ps_malloc((size_t)CLK_REG_W * CLK_REG_H * sizeof(uint16_t));
+  Serial.printf("clock buffer: %s (%d bytes)\n",
+                clockBuf ? "ok" : "FAILED - falling back to full repaint",
+                (int)((size_t)CLK_REG_W * CLK_REG_H * sizeof(uint16_t)));
+
+  i2cScan();
+  gt911Probe();
+  haveBH1750 = bh1750Begin();
+  haveSHT31  = sht31Begin();          // TEST 062
+  haveBME280 = bme280Begin();
+  haveDS3231 = ds3231Present();
+  if (haveDS3231) { timeSet = true; Serial.println("DS3231 RTC found (0x68) - using battery-backed time"); }
+  else Serial.println("DS3231 absent - clock uses manual 'time HH:MM'");
+  Serial.printf("BH1750 %s, BME/BMP280 %s\n",
+                haveBH1750 ? "ok" : "absent", haveBME280 ? "ok" : "absent");
+  Serial.printf("SHT31 %s  - temperature and humidity source\n",
+                haveSHT31 ? "ok" : "absent");
+
+  randomSeed(esp_random());
+  if (haveBH1750) luxOK = bh1750Read(gLux);
+  // TEST 062: SHT31 owns temperature and humidity; BMP280 owns pressure.
+  {
+    float bt = 0, bh = 0, bp = 0;
+    pressOK = haveBME280 && bme280Read(bt, bh, bp);
+    if (pressOK) gPress = bp;
+    if (haveSHT31) {
+      humOK = sht31Read(gTemp, gHum);
+      tempOK = humOK;
+    } else {
+      tempOK = pressOK;
+      if (pressOK) gTemp = bt;
+      humOK = false;
+    }
+  }
+  computeTargetFromLux();
+
+  // ---- LVGL init ----
+  lv_init();
+  const int BUF_LINES = 60;
+  lvbuf1 = (lv_color_t *)ps_malloc(SCREEN_W * BUF_LINES * sizeof(lv_color_t));
+  lv_disp_draw_buf_init(&draw_buf, lvbuf1, NULL, SCREEN_W * BUF_LINES);
+  static lv_disp_drv_t disp_drv;
+  lv_disp_drv_init(&disp_drv);
+  disp_drv.hor_res = SCREEN_W;
+  disp_drv.ver_res = SCREEN_H;
+  disp_drv.flush_cb = lvglFlushCb;
+  disp_drv.draw_buf = &draw_buf;
+  lv_disp_drv_register(&disp_drv);
+
+  static lv_indev_drv_t indev_drv;
+  lv_indev_drv_init(&indev_drv);
+  indev_drv.type = LV_INDEV_TYPE_POINTER;
+  indev_drv.read_cb = lvglTouchCb;
+  lv_indev_drv_register(&indev_drv);
+
+  buildHome();
+  buildMassage();
+  buildRadio();
+  buildAC();
+  buildRoom();
+  buildSettings();
+  buildClock();
+  buildAnalog();
+  updateSensorLabel();
+  lv_scr_load(scrHome);
+
+  lastTouchMs = millis();
+  Serial.println("Ready — LVGL UI live. Taps send UART messages (see log).");
+}
+
+void loop() {
+  pollSerialCommands();
+  pollBedBox();              // TEST 077: levels coming back from the bed
+
+  // TEST 061: the microphone runs in EVERY state. It used to live inside
+  // the ST_UI branch, so it stopped the moment the screensaver came on.
+  if (micRead()) uttProcess();
+
+  if (state == ST_UI) {
+    lv_timer_handler();
+    animateTiles();          // TEST 064: lamp colour cycle, shade travel
+
+    if (millis() - lastSensorMs > 1000) {
+      lastSensorMs = millis();
+      if (haveBH1750) luxOK = bh1750Read(gLux);
+      {
+        float bt = 0, bh = 0, bp = 0;
+        pressOK = haveBME280 && bme280Read(bt, bh, bp);
+        if (pressOK) gPress = bp;
+        if (haveSHT31) { humOK = sht31Read(gTemp, gHum); tempOK = humOK; }
+        else { tempOK = pressOK; if (pressOK) gTemp = bt; humOK = false; }
+      }
+      computeTargetFromLux();
+      updateSensorLabel();
+      // TEST 063: the shade has no feedback. If the panel still thinks
+      // it is moving long after it should have finished, give up, or the
+      // next press would send STOP when the user means UP.
+      if (shadeMoving && (millis() - shadeStartMs) > SHADE_TIMEOUT_MS) {
+        shadeMoving = 0;
+        Serial.println("shade: movement timed out, assuming stopped");
+        refreshRoom();
+      }
+      // TEST 065: only touch the AC screen's widgets while it is the
+      // screen actually on show. Restyling hidden objects every second
+      // was invalidating LVGL for no reason.
+      if (lv_scr_act() == scrAC) refreshAC();
+
+      // TEST 054: one line a second, so a silent mic is obvious
+      if (micReady)
+        Serial.printf("mic: rms %.4f  peak %.4f  reads %u\n",
+                      micRms, micPeak, (unsigned)micReads);
+    }
+
+    // hide the wake banner after a moment
+    if (wakeShownMs && (millis() - wakeShownMs) > WAKE_SHOW_MS) {
+      wakeShownMs = 0;
+      if (wakeBanner) lv_obj_add_flag(wakeBanner, LV_OBJ_FLAG_HIDDEN);
+    }
+
+    if (millis() - lastEaseMs > 25) { lastEaseMs = millis(); easeBacklight(); }
+
+    // Random preset: character from settings
+    uint32_t rInt = (randomChar==0)?3500:(randomChar==2)?1500:2500;
+    int rLo = (randomChar==0)?30:(randomChar==2)?20:40;
+    if (randomActive && lv_scr_act() == scrMassage &&
+        millis() - lastRandomMs > rInt) {
+      lastRandomMs = millis();
+      int z = random(0, 4);
+      int v = random(rLo, 101);
+      lv_slider_set_value(sliderZone[z], v, LV_ANIM_ON);
+      lv_label_set_text_fmt(lblZoneVal[z], "%d%%", v);
+      sendMsg(curBedId, CMD_ZONE, z, v);
+    }
+
+    if (millis() - lastTouchMs > saverTimeoutMs) enterSaver();
+    delay(5);
+  } else if (state == ST_PREVIEW) {
+    int16_t x, y; bool t = false;
+    if (gt911Addr) gt911Read(x, y, t);
+    if (t) {
+      slideOn = false;                     // TEST 041: a touch stops the show
+      state = ST_UI;
+      gfx->fillScreen(BLACK);              // wipe the photo
+      lv_scr_load(scrSettings);            // back to Settings
+      lv_refr_now(NULL);                   // force a complete repaint now
+      delay(200);                          // debounce the release
+    } else if (slideOn && millis() >= slideNextMs) {
+      // TEST 041: advance the slideshow. showPhoto() is size-guarded and
+      // frees its buffer every time, so a long run cannot exhaust memory.
+      if (slideIdx >= photoCount) slideIdx = 0;
+      if (!showPhoto(photoList[slideIdx])) {
+        gfx->fillScreen(BLACK);
+        gfx->setTextColor(0x7BEF); gfx->setTextSize(2);
+        gfx->setCursor(200, 230); gfx->print("skipped: ");
+        gfx->print(photoList[slideIdx]);
+      }
+      slideIdx++;
+      slideNextMs = millis() + SLIDE_MS;
+    }
+    if (millis() - lastEaseMs > 25) { lastEaseMs = millis(); easeBacklight(); }
+    delay(10);
+  } else {
+    // diver clock screensaver (raw gfx, LVGL paused)
+    int16_t x, y; bool t = false;
+    if (gt911Addr && gt911Read(x, y, t) && t) { exitSaver(); return; }
+
+    static uint32_t lastTick = 0;
+    if (millis() - lastTick >= 1000) {
+      lastTick = millis();
+      drawDiverClock();
+    }
+    if (millis() - lastEaseMs > 25) { lastEaseMs = millis(); easeBacklight(); }
+    delay(10);
+  }
+}
+
+/* ============================================================
+ *                        TEST  062   (end of file)
+ * ============================================================
+ *  Panel - Stage 3 - rebuild of the lost 041-044 on top of 040
+ *
+ *   041  memory-safe photos (600 KB guard, PSRAM then heap,
+ *        always freed) + Files-tab slideshow, 2 s per photo
+ *   042  +/- time setter replacing the broken rollers,
+ *        12-hour AM/PM on the settings, LVGL and 7-segment faces
+ *   043  clock hands dimmed to about 70 percent
+ *   044  null guards on updateSensorLabel, updateClockFace and
+ *        updateAnalog, all display pointers initialised to NULL
+ *
+ *  platformio.ini v4 - LV_CONF_SKIP, no lv_conf.h needed.
+ *  Next: bed box TEST 0014 on UART, then end-to-end motor test.
+ *
+ *  TRY THESE ON THE SERIAL CONSOLE AFTER FLASHING
+ *    sensors   one line with every reading, and which chips answered
+ *    trend     force a pressure trend recalculation instead of
+ *              waiting for the 10-minute window
+ *    time HH:MM  sets the clock AND writes it to the DS3231, so it
+ *              now survives a power cut
+ * ============================================================
+ *                  TEST  081   (end of file)
+ *  Massage screen rebuilt: 12 mode tiles, upright zone sliders,
+ *  time, date and temperature top right, no bed selector.
+ *  Settings now sets the DATE as well as the time.
+ *  The sliders follow the running pattern, fed up the wire.
+ *  Clock tab: the date row no longer sits on top of the time.
+ *  TEST 080: dark enough to sleep beside. Needs the new temp_font.h.
+ *  TEST 081: each panel boots with its owner's photograph.
+ * ============================================================ */
