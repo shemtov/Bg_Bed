@@ -1,5 +1,5 @@
 /* ============================================================
- *                        TEST  011
+ *                        TEST  014
  * ============================================================
  *
  *  AUDIO NODE  -  internet radio + phone control
@@ -33,13 +33,43 @@
  *  NOT TESTED ON HARDWARE. Build to confirm.
  * ============================================================ */
 
-#define TEST_NUMBER 11
+#define TEST_NUMBER 14
+
+/* ============================================================
+ *  BENCH MODE SWITCH  -  read this before you change it
+ * ============================================================
+ *
+ *  USE_WIFI 0  = wired ethernet through the W5500.
+ *                THIS IS THE ONLY CORRECT SETTING FOR THE BEDROOM.
+ *                Leave the repo like this. Always.
+ *
+ *  USE_WIFI 1  = wireless, for working at the bench with no
+ *                cable. Everything above the network - the web
+ *                page, the radio, the presets, the protocol -
+ *                behaves identically, so anything you prove on
+ *                the bench stays proven on the wire.
+ *
+ *  Turn it on for a session. Turn it off before you commit.
+ *  The whole project exists to keep radio away from the heads.
+ *
+ *  Note: the address will NOT be 192.168.1.195 in wifi mode.
+ *  The router hands out a different one. The banner prints it.
+ *
+ *  Note: do not commit a real password to a public repo.
+ * ============================================================ */
+
+#define USE_WIFI      0
+
+#define WIFI_SSID     "PUT_YOUR_NETWORK_NAME_HERE"
+#define WIFI_PASS     "PUT_YOUR_PASSWORD_HERE"
 
 #include <Arduino.h>
 #include <SPI.h>
 #include <ETH.h>
+#include <WiFi.h>
 #include <WebServer.h>
 #include <Preferences.h>
+#include <ArduinoOTA.h>
 #include "Audio.h"
 
 /* ---------- pin map ---------- */
@@ -108,6 +138,67 @@ static String g_presetName[PRESET_COUNT];
 static String g_presetUrl[PRESET_COUNT];
 static String g_lastUrl;
 
+/* ============================================================
+ *  LOG CAPTURE
+ *  Every line that goes to the usb serial port is also kept in
+ *  a ring buffer in memory, and echoed to anyone connected on
+ *  the network log port. So you can read the terminal three
+ *  ways at once: usb, a web page, or a terminal program.
+ * ============================================================ */
+
+#define LOG_LINES     120
+#define LOG_LINE_MAX  160
+#define LOG_PORT      2323
+
+static char  g_log[LOG_LINES][LOG_LINE_MAX];
+static int   g_logHead  = 0;
+static int   g_logCount = 0;
+
+NetworkServer logServer(LOG_PORT);
+NetworkClient logClient;
+
+static void logStore(const char *line)
+{
+  strncpy(g_log[g_logHead], line, LOG_LINE_MAX - 1);
+  g_log[g_logHead][LOG_LINE_MAX - 1] = 0;
+  g_logHead = (g_logHead + 1) % LOG_LINES;
+  if (g_logCount < LOG_LINES) g_logCount++;
+}
+
+/* say() replaces Serial.println for anything worth keeping.
+ * it prints to usb, stores in the ring, and pushes to the
+ * network terminal if someone is attached. */
+static void say(const String &line)
+{
+  Serial.println(line);
+  logStore(line.c_str());
+  if (logClient && logClient.connected()) {
+    logClient.print(line);
+    logClient.print("\r\n");
+  }
+}
+
+static void sayf(const char *fmt, ...)
+{
+  char buf[LOG_LINE_MAX];
+  va_list ap;
+  va_start(ap, fmt);
+  vsnprintf(buf, sizeof(buf), fmt, ap);
+  va_end(ap);
+  say(String(buf));
+}
+
+/* ---------- which interface are we on ---------- */
+
+static IPAddress localIP()
+{
+#if USE_WIFI
+  return WiFi.localIP();
+#else
+  return ETH.localIP();
+#endif
+}
+
 /* ---------- presets in flash ---------- */
 
 static void loadPresets()
@@ -153,8 +244,8 @@ static void playUrlNamed(const String &url, const String &name)
   g_nowTitle = "";
 
   Serial.println();
-  Serial.printf("play ....... %s\n", name.c_str());
-  Serial.printf("url ........ %s\n", url.c_str());
+  sayf("play ....... %s", name.c_str());
+  sayf("url ........ %s", url.c_str());
 
   if (!audio.connecttohost(url.c_str())) {
     Serial.println(F("play ....... connecttohost returned FALSE"));
@@ -322,6 +413,9 @@ static void handleRoot()
   p += F("<div class='dim'>Search a station directory in another tab, "
          "copy the stream url, paste it above, then save it here.</div>");
 
+  p += F("<h2>Diagnostics</h2>");
+  p += F("<a class='btn' href='/log'>View the log</a>");
+
   p += F("<div style='height:40px'></div></body></html>");
 
   server.send(200, "text/html", p);
@@ -388,9 +482,110 @@ static void handleNotFound()
   server.send(404, "text/plain", "not here");
 }
 
+static void handleLine(String line);   /* defined further down */
+
+static void handleLog()
+{
+  String p = pageHead();
+  p += F("<h1>Log</h1>");
+  p += F("<div class='dim'>newest at the bottom &middot; reload to refresh</div>");
+  p += F("<pre style='background:#0c0e15;border-radius:12px;padding:12px;"
+         "font-size:11px;line-height:1.5;overflow-x:auto;white-space:pre-wrap;"
+         "word-break:break-all;color:#c8c8d0;margin-top:12px'>");
+
+  int start = (g_logCount < LOG_LINES) ? 0
+            : g_logHead;
+
+  for (int i = 0; i < g_logCount; i++) {
+    int idx = (start + i) % LOG_LINES;
+    p += htmlEscape(String(g_log[idx]));
+    p += "\n";
+  }
+
+  p += F("</pre>");
+  p += F("<a class='btn' href='/log'>Refresh</a>");
+  p += F("<a class='btn' href='/'>Back to radio</a>");
+  p += F("<div style='height:40px'></div></body></html>");
+
+  server.send(200, "text/html", p);
+}
+
+static void startOTA()
+{
+  ArduinoOTA.setHostname("audionode");
+  ArduinoOTA.setPassword("bgbed");
+
+  ArduinoOTA.onStart([]() {
+    /* streaming while flashing is asking for trouble. stop it first. */
+    audio.stopSong();
+    g_nowName  = "updating firmware";
+    g_nowTitle = "";
+    say(F("ota ........ upload starting, radio stopped"));
+  });
+
+  ArduinoOTA.onProgress([](unsigned int done, unsigned int total) {
+    static int lastPct = -1;
+    int pct = (total > 0) ? (int)((done * 100) / total) : 0;
+    if (pct != lastPct && pct % 10 == 0) {
+      lastPct = pct;
+      sayf("ota ........ %d%%", pct);
+    }
+  });
+
+  ArduinoOTA.onEnd([]() {
+    say(F("ota ........ done, restarting"));
+  });
+
+  ArduinoOTA.onError([](ota_error_t e) {
+    sayf("ota ........ FAILED, code %u", (unsigned) e);
+  });
+
+  ArduinoOTA.begin();
+
+  say(F("ota ........ ready. upload to this address, password bgbed"));
+}
+
+static void startLogServer()
+{
+  logServer.begin();
+  logServer.setNoDelay(true);
+  sayf("log ........ network terminal on port %d", LOG_PORT);
+}
+
+static void pollLogServer()
+{
+  if (logServer.hasClient()) {
+    if (logClient && logClient.connected()) logClient.stop();
+    logClient = logServer.accept();
+    logClient.println();
+    logClient.printf("audionode TEST %03d - live log\r\n", TEST_NUMBER);
+    logClient.println("------------------------------------------------------------");
+
+    int start = (g_logCount < LOG_LINES) ? 0 : g_logHead;
+    for (int i = 0; i < g_logCount; i++) {
+      logClient.println(g_log[(start + i) % LOG_LINES]);
+    }
+    logClient.println("------------------------------------------------------------");
+  }
+
+  /* anything typed into the network terminal is treated exactly
+   * like something typed into the usb monitor */
+  if (logClient && logClient.connected()) {
+    while (logClient.available()) {
+      char c = (char) logClient.read();
+      if (c == '\n' || c == '\r') {
+        if (g_line.length()) { handleLine(g_line); g_line = ""; }
+      } else {
+        if (g_line.length() < 300) g_line += c;
+      }
+    }
+  }
+}
+
 static void startWebServer()
 {
   server.on("/",      handleRoot);
+  server.on("/log",   handleLog);
   server.on("/play",  handlePlay);
   server.on("/url",   handleUrl);
   server.on("/save",  handleSave);
@@ -402,7 +597,7 @@ static void startWebServer()
   Serial.println();
   Serial.println(F("------------------------------------------------------------"));
   Serial.print  (F("  OPEN THIS ON YOUR PHONE:   http://"));
-  Serial.println(ETH.localIP());
+  Serial.println(localIP());
   Serial.println(F("  same wifi as this router. leave the phone anywhere."));
   Serial.println(F("------------------------------------------------------------"));
   Serial.println();
@@ -430,7 +625,7 @@ static void printInfo()
   Serial.println();
   Serial.printf("link ....... %s\n", g_linkUp ? "UP" : "DOWN");
   Serial.print (F("address .... "));
-  Serial.println(g_haveAddress ? ETH.localIP().toString() : String("none"));
+  Serial.println(g_haveAddress ? localIP().toString() : String("none"));
   Serial.printf("volume ..... %d of %d\n", g_volume, VOLUME_MAX);
   Serial.printf("now ........ %s\n", g_nowName.c_str());
   Serial.printf("running .... %s\n", audio.isRunning() ? "yes" : "no");
@@ -499,10 +694,11 @@ static void onNetEvent(arduino_event_id_t event)
     case ARDUINO_EVENT_ETH_GOT_IP:
       g_haveAddress = true;
       Serial.println();
-      Serial.print  (F("  IP ADDRESS   "));  Serial.println(ETH.localIP());
-      Serial.print  (F("  GATEWAY      "));  Serial.println(ETH.gatewayIP());
-      Serial.print  (F("  MAC          "));  Serial.println(ETH.macAddress());
+      Serial.print  (F("  IP ADDRESS   "));  Serial.println(localIP());
+      Serial.print  (F("  MODE         "));  Serial.println(USE_WIFI ? "WIFI - bench only" : "wired ethernet");
       startWebServer();
+      startOTA();
+      startLogServer();
       listStations();
       if (AUTOPLAY_STATION >= 0 && !g_autoplayDone) {
         g_autoplayAt = millis() + AUTOPLAY_DELAY_MS;
@@ -517,6 +713,35 @@ static void onNetEvent(arduino_event_id_t event)
       Serial.println(F("eth ........ LINK DOWN"));
       break;
 
+    case ARDUINO_EVENT_WIFI_STA_CONNECTED:
+      g_linkUp = true;
+      Serial.println(F("wifi ....... associated"));
+      break;
+
+    case ARDUINO_EVENT_WIFI_STA_GOT_IP:
+      g_linkUp      = true;
+      g_haveAddress = true;
+      Serial.println();
+      Serial.print  (F("  IP ADDRESS   "));  Serial.println(WiFi.localIP());
+      Serial.printf (  "  SIGNAL       %d dBm\n", WiFi.RSSI());
+      Serial.println(F("  MODE         WIFI - bench only, not for the bedroom"));
+      startWebServer();
+      startOTA();
+      startLogServer();
+      listStations();
+      if (AUTOPLAY_STATION >= 0 && !g_autoplayDone) {
+        g_autoplayAt = millis() + AUTOPLAY_DELAY_MS;
+        Serial.printf("autoplay ... station %d in %d ms\n",
+                      AUTOPLAY_STATION, AUTOPLAY_DELAY_MS);
+      }
+      break;
+
+    case ARDUINO_EVENT_WIFI_STA_DISCONNECTED:
+      g_linkUp      = false;
+      g_haveAddress = false;
+      Serial.println(F("wifi ....... disconnected, retrying"));
+      break;
+
     default:
       break;
   }
@@ -526,29 +751,29 @@ static void onNetEvent(arduino_event_id_t event)
 
 void audio_info(const char *info)
 {
-  Serial.printf("audio ...... %s\n", info);
+  sayf("audio ...... %s", info);
 }
 
 void audio_showstation(const char *info)
 {
-  Serial.printf("  STATION    %s\n", info);
+  sayf("  STATION    %s", info);
   if (info && *info) g_nowName = String(info);
 }
 
 void audio_showstreamtitle(const char *info)
 {
-  Serial.printf("  NOW PLAYING  %s\n", info);
+  sayf("  NOW PLAYING  %s", info);
   g_nowTitle = String(info ? info : "");
 }
 
 void audio_bitrate(const char *info)
 {
-  Serial.printf("audio ...... bitrate %s\n", info);
+  sayf("audio ...... bitrate %s", info);
 }
 
 void audio_eof_stream(const char *info)
 {
-  Serial.printf("audio ...... stream ended: %s\n", info);
+  sayf("audio ...... stream ended: %s", info);
 }
 
 /* ---------- setup ---------- */
@@ -584,6 +809,22 @@ void setup()
 
   Network.onEvent(onNetEvent);
 
+#if USE_WIFI
+
+  Serial.println(F("************************************************************"));
+  Serial.println(F("*  BENCH MODE - WIFI IS ON. RADIO IS TRANSMITTING.         *"));
+  Serial.println(F("*  This must never be the setting near the beds.           *"));
+  Serial.println(F("************************************************************"));
+  Serial.printf ("wifi ....... joining %s\n", WIFI_SSID);
+
+  WiFi.mode(WIFI_STA);
+  WiFi.setSleep(false);
+  WiFi.begin(WIFI_SSID, WIFI_PASS);
+
+#else
+
+  Serial.println(F("mode ....... wired ethernet, no radio"));
+
   pinMode(PIN_ETH_RST, OUTPUT);
   digitalWrite(PIN_ETH_RST, LOW);
   delay(20);
@@ -600,6 +841,8 @@ void setup()
     Serial.println(F("  !!! ETH.begin RETURNED FALSE - wiring or power !!!"));
   }
 
+#endif
+
   audio.setPinout(PIN_I2S_BCLK, PIN_I2S_LRC, PIN_I2S_DOUT);
   audio.setVolume(g_volume);
   Serial.printf("i2s ........ ready, volume %d of %d\n", g_volume, VOLUME_MAX);
@@ -613,7 +856,11 @@ void loop()
   audio.loop();
   pollSerial();
 
-  if (g_haveAddress) server.handleClient();
+  if (g_haveAddress) {
+    server.handleClient();
+    ArduinoOTA.handle();
+    pollLogServer();
+  }
 
   unsigned long now = millis();
 
@@ -626,17 +873,17 @@ void loop()
 
   if (now - g_lastStatus >= STATUS_EVERY_MS) {
     g_lastStatus = now;
-    Serial.printf("[%5lus] link %s  playing %s  heap %u  psram %u\n",
-                  (now - g_bootMillis) / 1000,
-                  g_linkUp ? "UP  " : "DOWN",
-                  audio.isRunning() ? "yes" : "no ",
-                  (unsigned) ESP.getFreeHeap(),
-                  (unsigned) ESP.getFreePsram());
+    sayf("[%5lus] link %s  playing %s  heap %u  psram %u",
+         (now - g_bootMillis) / 1000,
+         g_linkUp ? "UP  " : "DOWN",
+         audio.isRunning() ? "yes" : "no ",
+         (unsigned) ESP.getFreeHeap(),
+         (unsigned) ESP.getFreePsram());
   }
 }
 
 /* ============================================================
- *                        TEST  011
+ *                        TEST  014
  *        AUDIO NODE - radio over ethernet + web page control
  *   open http://<node address> on your phone. presets in flash.
  * ============================================================ */
