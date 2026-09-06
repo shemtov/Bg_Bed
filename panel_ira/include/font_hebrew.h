@@ -33,7 +33,7 @@
  *----------------*/
 
 /*Store the image of the glyphs*/
-static LV_ATTRIBUTE_LARGE_CONST const uint8_t fh_glyph_bitmap[] = {
+static LV_ATTRIBUTE_LARGE_CONST const uint8_t glyph_bitmap[] = {
     /* U+0020 " " */
 
     /* U+0021 "!" */
@@ -2560,7 +2560,7 @@ static LV_ATTRIBUTE_LARGE_CONST const uint8_t fh_glyph_bitmap[] = {
  *  GLYPH DESCRIPTION
  *--------------------*/
 
-static const lv_font_fmt_txt_glyph_dsc_t fh_glyph_dsc[] = {
+static const lv_font_fmt_txt_glyph_dsc_t glyph_dsc[] = {
     {.bitmap_index = 0, .adv_w = 0, .box_w = 0, .box_h = 0, .ofs_x = 0, .ofs_y = 0} /* id = 0 reserved */,
     {.bitmap_index = 0, .adv_w = 156, .box_w = 0, .box_h = 0, .ofs_x = 0, .ofs_y = 0},
     {.bitmap_index = 0, .adv_w = 204, .box_w = 6, .box_h = 21, .ofs_x = 3, .ofs_y = 0},
@@ -2693,7 +2693,7 @@ static const lv_font_fmt_txt_glyph_dsc_t fh_glyph_dsc[] = {
 
 
 /*Collect the unicode lists and glyph_id offsets*/
-static const lv_font_fmt_txt_cmap_t fh_cmaps[] =
+static const lv_font_fmt_txt_cmap_t cmaps[] =
 {
     {
         .range_start = 32, .range_length = 95, .glyph_id_start = 1,
@@ -2713,17 +2713,17 @@ static const lv_font_fmt_txt_cmap_t fh_cmaps[] =
 
 #if LVGL_VERSION_MAJOR == 8
 /*Store all the custom data of the font*/
-static  lv_font_fmt_txt_glyph_cache_t fh_cache;
+static  lv_font_fmt_txt_glyph_cache_t cache;
 #endif
 
 #if LVGL_VERSION_MAJOR >= 8
-static const lv_font_fmt_txt_dsc_t fh_font_dsc = {
+static const lv_font_fmt_txt_dsc_t font_dsc = {
 #else
-static lv_font_fmt_txt_dsc_t fh_font_dsc = {
+static lv_font_fmt_txt_dsc_t font_dsc = {
 #endif
-    .glyph_bitmap = fh_glyph_bitmap,
-    .glyph_dsc = fh_glyph_dsc,
-    .cmaps = fh_cmaps,
+    .glyph_bitmap = glyph_bitmap,
+    .glyph_dsc = glyph_dsc,
+    .cmaps = cmaps,
     .kern_dsc = NULL,
     .kern_scale = 0,
     .cmap_num = 2,
@@ -2731,7 +2731,7 @@ static lv_font_fmt_txt_dsc_t fh_font_dsc = {
     .kern_classes = 0,
     .bitmap_format = 0,
 #if LVGL_VERSION_MAJOR == 8
-    .cache = &fh_cache
+    .cache = &cache
 #endif
 };
 
@@ -2758,7 +2758,7 @@ lv_font_t font_hebrew_28 = {
     .underline_position = -1,
     .underline_thickness = 1,
 #endif
-    .dsc = &fh_font_dsc,          /*The custom font data. Will be accessed by `get_glyph_bitmap/dsc` */
+    .dsc = &font_dsc,          /*The custom font data. Will be accessed by `get_glyph_bitmap/dsc` */
 #if LV_VERSION_CHECK(8, 2, 0) || LVGL_VERSION_MAJOR >= 9
     .fallback = NULL,
 #endif

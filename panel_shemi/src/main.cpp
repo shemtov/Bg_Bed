@@ -1,8 +1,18 @@
 // ============================================================
-// PANEL SHEMI - TEST 056  (the screensaver hands, restored)
+// PANEL SHEMI - TEST 066 - MATCHED PAIR + SEIKO NIGHT SCREENSAVER
 // ============================================================
 //
 // Board: Waveshare ESP32-S3-Touch-LCD-7B, 1024 x 600
+//
+// WHAT CHANGED IN TEST 083:
+//   Fixes TEST082 build failure: the generated setup Serial.println()
+//   line lost its closing quote/parenthesis during text replacement.
+//   TEST083 uses safe whole-line replacements and preserves valid C++.
+//   Ira still uses the full 7-inch UI and receives clock/date from
+//   Shemi over onboard RS485 (RX GPIO15, TX GPIO16, 115200 8N1).
+//
+// NOT YET COMPILED OR RUN ON HARDWARE.
+//
 //
 // WHAT CHANGED vs TEST 055
 //   THE LONG PRESS NEVER FIRED, and the approach was the fault. I
@@ -1470,8 +1480,105 @@
 // shows her photograph, so the picture on screen tells you which
 // board you just flashed.
 #define PANEL_ID 1
+#define RS485_RX_PIN 15
+#define RS485_TX_PIN 16
+#define RS485_BAUD   115200
+#define RS485        Serial1
 
-#define TEST_NUMBER 56
+static constexpr uint8_t NODE_SHEMI  = 1;
+static constexpr uint8_t NODE_IRA    = 2;
+static constexpr uint8_t FRAME_START = 0xA5;
+static constexpr uint8_t TYPE_TIME   = 0x10;
+static constexpr uint8_t TYPE_ACK    = 0x11;
+
+struct TimeFrame {
+  uint8_t start;
+  uint8_t src;
+  uint8_t dst;
+  uint8_t type;
+  uint8_t seqLo;
+  uint8_t seqHi;
+  uint8_t yearLo;
+  uint8_t yearHi;
+  uint8_t month;
+  uint8_t day;
+  uint8_t hour;
+  uint8_t minute;
+  uint8_t second;
+  uint8_t crc;
+};
+
+static_assert(sizeof(TimeFrame) == 14, "TimeFrame must be exactly 14 bytes");
+
+static uint32_t rsGoodTimes = 0;
+static uint32_t rsBadFrames = 0;
+static uint32_t rsReplies   = 0;
+
+static uint8_t rsFrameCrc(const TimeFrame &f) {
+  const uint8_t *p = reinterpret_cast<const uint8_t *>(&f);
+  uint8_t c = 0;
+  for (size_t i = 0; i < sizeof(TimeFrame) - 1; ++i) c ^= p[i];
+  return c;
+}
+
+static uint16_t rsFrameSeq(const TimeFrame &f) {
+  return uint16_t(f.seqLo) | (uint16_t(f.seqHi) << 8);
+}
+
+static uint16_t rsFrameYear(const TimeFrame &f) {
+  return uint16_t(f.yearLo) | (uint16_t(f.yearHi) << 8);
+}
+
+static TimeFrame rsMakeAck(uint16_t seq) {
+  TimeFrame f{};
+  f.start = FRAME_START;
+  f.src = NODE_IRA;
+  f.dst = NODE_SHEMI;
+  f.type = TYPE_ACK;
+  f.seqLo = uint8_t(seq & 0xFF);
+  f.seqHi = uint8_t((seq >> 8) & 0xFF);
+  f.crc = rsFrameCrc(f);
+  return f;
+}
+
+static void rsSendFrame(const TimeFrame &f) {
+  RS485.write(reinterpret_cast<const uint8_t *>(&f), sizeof(f));
+  RS485.flush();
+}
+
+static bool rsReadFrame(TimeFrame &out) {
+  static uint8_t buf[sizeof(TimeFrame)];
+  static size_t pos = 0;
+
+  while (RS485.available()) {
+    const uint8_t b = uint8_t(RS485.read());
+
+    if (pos == 0) {
+      if (b != FRAME_START) continue;
+      buf[pos++] = b;
+      continue;
+    }
+
+    buf[pos++] = b;
+
+    if (pos == sizeof(TimeFrame)) {
+      memcpy(&out, buf, sizeof(out));
+      pos = 0;
+      return true;
+    }
+  }
+  return false;
+}
+
+static bool rsTimeFieldsValid(const TimeFrame &f) {
+  const uint16_t y = rsFrameYear(f);
+  return y >= 2000 && y <= 2099 &&
+         f.month >= 1 && f.month <= 12 &&
+         f.day >= 1 && f.day <= 31 &&
+         f.hour <= 23 && f.minute <= 59 && f.second <= 59;
+}
+
+#define TEST_NUMBER 66
 
 // ------------------------------------------------------------
 // Layout. Every number here is derived, not guessed - see the
@@ -1793,7 +1900,145 @@ static bool rtcWriteRegs(uint8_t reg, const uint8_t *data, size_t len) {
 
 static uint8_t dayOfWeek(uint16_t y, uint8_t m, uint8_t d);
 
+static uint16_t rsTxSeq = 0;
+static uint32_t rsTxGoodAck = 0;
+static uint32_t rsTxTimeout = 0;
+static uint32_t rsTxBadAck = 0;
+
+static bool rs485WaitForTimeAck(uint16_t wantedSeq) {
+#if PANEL_ID == 1
+  const uint32_t startMs = millis();
+  TimeFrame rx{};
+
+  while (millis() - startMs < 400) {
+    if (!rsReadFrame(rx)) {
+      delay(1);
+      continue;
+    }
+
+    if (rx.crc != rsFrameCrc(rx)) {
+      ++rsTxBadAck;
+      continue;
+    }
+
+    const uint16_t seq = rsFrameSeq(rx);
+    if (rx.src == NODE_IRA &&
+        rx.dst == NODE_SHEMI &&
+        rx.type == TYPE_ACK &&
+        seq == wantedSeq) {
+      ++rsTxGoodAck;
+      Serial.printf("[485] RX IRA TIME ACK seq=%u RTT=%lu ms good=%lu timeout=%lu bad=%lu\n",
+                    wantedSeq,
+                    (unsigned long)(millis() - startMs),
+                    (unsigned long)rsTxGoodAck,
+                    (unsigned long)rsTxTimeout,
+                    (unsigned long)rsTxBadAck);
+      return true;
+    }
+    ++rsTxBadAck;
+  }
+
+  ++rsTxTimeout;
+  Serial.printf("[485] TIMEOUT waiting IRA TIME ACK seq=%u timeout=%lu bad=%lu\n",
+                wantedSeq,
+                (unsigned long)rsTxTimeout,
+                (unsigned long)rsTxBadAck);
+#endif
+  return false;
+}
+
+static void rs485ClockSendTick() {
+#if PANEL_ID == 1
+  static uint32_t lastSendMs = 0;
+  const uint32_t ms = millis();
+  if (ms - lastSendMs < 1000) return;
+  lastSendMs = ms;
+
+  if (!now.valid || now.wasStopped) {
+    Serial.println("[RTC] CLOCK NOT READY - nothing sent");
+    return;
+  }
+
+  TimeFrame tx{};
+  tx.start  = FRAME_START;
+  tx.src    = NODE_SHEMI;
+  tx.dst    = NODE_IRA;
+  tx.type   = TYPE_TIME;
+  tx.seqLo  = uint8_t(rsTxSeq & 0xFF);
+  tx.seqHi  = uint8_t((rsTxSeq >> 8) & 0xFF);
+  tx.yearLo = uint8_t(now.year & 0xFF);
+  tx.yearHi = uint8_t((now.year >> 8) & 0xFF);
+  tx.month  = now.month;
+  tx.day    = now.day;
+  tx.hour   = now.hour;
+  tx.minute = now.min;
+  tx.second = now.sec;
+  tx.crc    = rsFrameCrc(tx);
+
+  rsSendFrame(tx);
+  Serial.printf("[RTC] %04u-%02u-%02u %02u:%02u:%02u -> [485] TX TIME seq=%u\n",
+                now.year, now.month, now.day,
+                now.hour, now.min, now.sec, rsTxSeq);
+
+  rs485WaitForTimeAck(rsTxSeq);
+  ++rsTxSeq;
+#endif
+}
+static void rs485ClockPoll() {
+#if PANEL_ID == 2
+  TimeFrame rx{};
+
+  while (rsReadFrame(rx)) {
+    if (rx.crc != rsFrameCrc(rx)) {
+      ++rsBadFrames;
+      Serial.printf("[485] BAD CRC bad=%lu\n", (unsigned long)rsBadFrames);
+      continue;
+    }
+
+    if (rx.dst != NODE_IRA && rx.dst != 0) continue;
+    if (rx.src != NODE_SHEMI || rx.type != TYPE_TIME) continue;
+
+    const uint16_t seq = rsFrameSeq(rx);
+
+    if (!rsTimeFieldsValid(rx)) {
+      ++rsBadFrames;
+      Serial.printf("[485] INVALID TIME seq=%u bad=%lu\n",
+                    seq, (unsigned long)rsBadFrames);
+      continue;
+    }
+
+    now.year  = rsFrameYear(rx);
+    now.month = rx.month;
+    now.day   = rx.day;
+    now.hour  = rx.hour;
+    now.min   = rx.minute;
+    now.sec   = rx.second;
+    now.dow   = dayOfWeek(now.year, now.month, now.day);
+    now.valid = true;
+    now.wasStopped = false;
+
+    ++rsGoodTimes;
+    Serial.printf("[TIME] %04u-%02u-%02u %02u:%02u:%02u RX seq=%u good=%lu bad=%lu\n",
+                  now.year, now.month, now.day,
+                  now.hour, now.min, now.sec,
+                  seq,
+                  (unsigned long)rsGoodTimes,
+                  (unsigned long)rsBadFrames);
+
+    delay(2);
+    TimeFrame ack = rsMakeAck(seq);
+    rsSendFrame(ack);
+    ++rsReplies;
+    Serial.printf("[485] TX IRA TIME ACK seq=%u replies=%lu\n",
+                  seq, (unsigned long)rsReplies);
+  }
+#endif
+}
+
 static void rtcRead() {
+#if PANEL_ID == 2
+  return;  // Ira clock comes from Shemi over RS485.
+#endif
   uint8_t b[7];
   if (!rtcReadRegs(RTC_REG_TIME, b, 7)) { now.valid = false; return; }
 
@@ -2898,30 +3143,30 @@ static lv_obj_t *setBigLabel(lv_obj_t *parent, const char *txt) {
 // bidirectional text engine and would draw these left to right, so
 // the letters are pre-reversed. Copied byte for byte from TEST 081.
 // Reordering them in an editor breaks them.
-#define P_MAPAL     "\xD7\x9C\xD7\xA4\xD7\x9E"                          // מפל
-#define P_ALIYA     "\xD7\x94\xD7\x99\xD7\x99\xD7\x9C\xD7\xA2"          // עלייה
-#define P_NADNEDA   "\xD7\x94\xD7\x93\xD7\xA0\xD7\x93\xD7\xA0"          // נדנדה
-#define P_MALE      "\xD7\x90\xD7\x9C\xD7\x9E"                          // מלא
-#define P_ALACHSON  "\xD7\x9F\xD7\x95\xD7\xA1\xD7\x9B\xD7\x9C\xD7\x90"  // אלכסון
-#define P_TZAD      "\xD7\x93\xD7\xA6"                                  // צד
-#define P_SICHRUR   "\xD7\xA8\xD7\x95\xD7\xA8\xD7\x97\xD7\xA1"          // סחרור
-#define P_LISHA     "\xD7\x94\xD7\xA9\xD7\x99\xD7\x9C"                  // לישה
-#define P_DOFEK     "\xD7\xA7\xD7\xA4\xD7\x95\xD7\x93"                  // דופק
-#define P_NESHIMA   "\xD7\x94\xD7\x9E\xD7\x99\xD7\xA9\xD7\xA0"          // נשימה
-#define P_GESHEM    "\xD7\x9D\xD7\xA9\xD7\x92"                          // גשם
-#define P_AKRAI     "\xD7\x99\xD7\x90\xD7\xA8\xD7\xA7\xD7\x90"          // אקראי
-#define M_OFF       "\xD7\x99\xD7\x95\xD7\x91\xD7\x9B"                  // כיבוי (unused since TEST 044)
+#define P_MAPAL     "\xD7\x9C\xD7\xA4\xD7\x9E"                          // ׳³ֲ׳³ג‚×׳³ֲ
+#define P_ALIYA     "\xD7\x94\xD7\x99\xD7\x99\xD7\x9C\xD7\xA2"          // ׳³ֲ¢׳³ֲ׳³ג„¢׳³ג„¢׳³ג€
+#define P_NADNEDA   "\xD7\x94\xD7\x93\xD7\xA0\xD7\x93\xD7\xA0"          // ׳³ֲ ׳³ג€׳³ֲ ׳³ג€׳³ג€
+#define P_MALE      "\xD7\x90\xD7\x9C\xD7\x9E"                          // ׳³ֲ׳³ֲ׳³ֲ
+#define P_ALACHSON  "\xD7\x9F\xD7\x95\xD7\xA1\xD7\x9B\xD7\x9C\xD7\x90"  // ׳³ֲ׳³ֲ׳³ג€÷׳³ֲ¡׳³ג€¢׳³ֲ
+#define P_TZAD      "\xD7\x93\xD7\xA6"                                  // ׳³ֲ¦׳³ג€
+#define P_SICHRUR   "\xD7\xA8\xD7\x95\xD7\xA8\xD7\x97\xD7\xA1"          // ׳³ֲ¡׳³ג€”׳³ֲ¨׳³ג€¢׳³ֲ¨
+#define P_LISHA     "\xD7\x94\xD7\xA9\xD7\x99\xD7\x9C"                  // ׳³ֲ׳³ג„¢׳³ֲ©׳³ג€
+#define P_DOFEK     "\xD7\xA7\xD7\xA4\xD7\x95\xD7\x93"                  // ׳³ג€׳³ג€¢׳³ג‚×׳³ֲ§
+#define P_NESHIMA   "\xD7\x94\xD7\x9E\xD7\x99\xD7\xA9\xD7\xA0"          // ׳³ֲ ׳³ֲ©׳³ג„¢׳³ֲ׳³ג€
+#define P_GESHEM    "\xD7\x9D\xD7\xA9\xD7\x92"                          // ׳³ג€™׳³ֲ©׳³ֲ
+#define P_AKRAI     "\xD7\x99\xD7\x90\xD7\xA8\xD7\xA7\xD7\x90"          // ׳³ֲ׳³ֲ§׳³ֲ¨׳³ֲ׳³ג„¢
+#define M_OFF       "\xD7\x99\xD7\x95\xD7\x91\xD7\x9B"                  // ׳³ג€÷׳³ג„¢׳³ג€˜׳³ג€¢׳³ג„¢ (unused since TEST 044)
 
 // Zone names, from TEST 075 in the repo. Pre-reversed like every
 // other Hebrew string here.
-#define Z_HEAD      "\xD7\xA9\xD7\x90\xD7\xA8"                          // ראש
-#define Z_UPPER     "\xD7\x9F\xD7\x95\xD7\x99\xD7\x9C\xD7\xA2 \xD7\x92\xD7\x91"   // גב עליון
-#define Z_LOWER     "\xD7\x9F\xD7\x95\xD7\xAA\xD7\x97\xD7\xAA \xD7\x92\xD7\x91"   // גב תחתון
-#define Z_LEGS      "\xD7\x9D\xD7\x99\xD7\x9C\xD7\x92\xD7\xA8"                  // רגליים
+#define Z_HEAD      "\xD7\xA9\xD7\x90\xD7\xA8"                          // ׳³ֲ¨׳³ֲ׳³ֲ©
+#define Z_UPPER     "\xD7\x9F\xD7\x95\xD7\x99\xD7\x9C\xD7\xA2 \xD7\x92\xD7\x91"   // ׳³ג€™׳³ג€˜ ׳³ֲ¢׳³ֲ׳³ג„¢׳³ג€¢׳³ֲ
+#define Z_LOWER     "\xD7\x9F\xD7\x95\xD7\xAA\xD7\x97\xD7\xAA \xD7\x92\xD7\x91"   // ׳³ג€™׳³ג€˜ ׳³ֳ—׳³ג€”׳³ֳ—׳³ג€¢׳³ֲ
+#define Z_LEGS      "\xD7\x9D\xD7\x99\xD7\x9C\xD7\x92\xD7\xA8"                  // ׳³ֲ¨׳³ג€™׳³ֲ׳³ג„¢׳³ג„¢׳³ֲ
 // The screen title, with a geresh, pre-reversed. font_hebrew_28
 // covers ASCII 0x20-0x7E, so the plain apostrophe is in the font.
-#define MASS_TITLE  "\x27\xD7\x96\xD7\x90\xD7\xA1\xD7\x9E"                  // מסאז\x27
-#define RADIO_TITLE "\xD7\x95\xD7\x99\xD7\x93\xD7\xA8"                      // רדיו
+#define MASS_TITLE  "\x27\xD7\x96\xD7\x90\xD7\xA1\xD7\x9E"                  // ׳³ֲ׳³ֲ¡׳³ֲ׳³ג€“\x27
+#define RADIO_TITLE "\xD7\x95\xD7\x99\xD7\x93\xD7\xA8"                      // ׳³ֲ¨׳³ג€׳³ג„¢׳³ג€¢
 
 static lv_obj_t *patTile[12];
 static lv_obj_t *sldZone[4];
@@ -3835,39 +4080,40 @@ static void dropBootPhoto() {
 // hands, and underneath the time in figures with temperature and
 // humidity.
 // ============================================================
-#define SAV_CX      512
-#define SAV_CY      280
-#define SAV_R       248
+#define SAV_CX      500
+#define SAV_CY      300
+#define SAV_R       250
+#define SAV_FACE_R  202
 
 static lv_obj_t *scrSaver = NULL;
 static lv_obj_t *savHandH = NULL, *savHandM = NULL, *savHandS = NULL;
-static lv_obj_t *savCoreH = NULL, *savCoreM = NULL;      // the dark gap
-// The triangle tips went in TEST 052 - see the banner.
+static lv_obj_t *savCoreH = NULL, *savCoreM = NULL;
 static lv_obj_t *savTemp = NULL, *savHum = NULL, *savAlarmImg = NULL;
-static lv_obj_t *savSecDot = NULL, *savDate = NULL;
+static lv_obj_t *savSecDot = NULL, *savDate = NULL, *savDow = NULL;
+static lv_obj_t *savName = NULL;
 
-// lv_line keeps the pointer it is given rather than copying, so
-// these have to outlive the call.
 static lv_point_t savPtH[2], savPtM[2], savPtS[2];
-static lv_point_t savPtHC[2], savPtMC[2];    // the cores ride the same angles
+static lv_point_t savPtHC[2], savPtMC[2];
+static lv_point_t savRingPts[60][2];
 
-#define SAV_GREEN   0x4CF08A     // the numerals
-#define SAV_GLOW    0x0E5A34     // the halo behind them
-#define SAV_HAND    0xC9C4B6     // the shafts
-#define SAV_ARROW   0xFFFFFF     // the heads, brighter as asked
+#define SAV_GREEN   0x91A87D
+#define SAV_GREEN2  0xA9BC96
+#define SAV_FACE    0x03111B
+#define SAV_FACE2   0x061D2B
+#define SAV_RING    0x2C2D2D
+#define SAV_RING_HI 0x575650
+#define SAV_HAND    0x8A887F
+#define SAV_RED     0xB61C22
 
 static lv_obj_t *savHand(lv_obj_t *par, int w, uint32_t col) {
   lv_obj_t *l = lv_line_create(par);
   lv_obj_set_style_line_color(l, lv_color_hex(col), 0);
   lv_obj_set_style_line_width(l, w, 0);
-  // Square caps. Rounded ends are what made the hands look soft.
   lv_obj_set_style_line_rounded(l, false, 0);
   lv_obj_clear_flag(l, LV_OBJ_FLAG_CLICKABLE);
   return l;
 }
 
-// deg is clock degrees, 0 at twelve. Screen y grows downward, so
-// twelve is x = sin, y = -cos.
 static void savSeg(lv_obj_t *o, lv_point_t *p, float deg, int from, int to) {
   float r = deg * 0.01745329f;
   p[0].x = (lv_coord_t)(SAV_CX + from * sinf(r));
@@ -3880,21 +4126,15 @@ static void savSeg(lv_obj_t *o, lv_point_t *p, float deg, int from, int to) {
 static void saverUpdate() {
   if (!scrSaver || !now.valid) return;
 
-  // Only the second hand moves every second. Moving all of them and
-  // the labels on every tick is what made the old panel twitch on
-  // an RGB display.
-  {
-    float as = now.sec * 6.0f;
-    // Thin line, counterweight tail past the centre, and the lume
-    // dot near the tip - the Tuna's most recognisable part.
-    if (savHandS) savSeg(savHandS, savPtS, as, -58, SAV_R - 60);
-    if (savSecDot) {
-      float r = as * 0.01745329f;
-      int dr = SAV_R - 84;
-      lv_obj_align(savSecDot, LV_ALIGN_TOP_LEFT,
-                   SAV_CX + (int)(dr * sinf(r)) - 11,
-                   SAV_CY - (int)(dr * cosf(r)) - 11);
-    }
+  float as = now.sec * 6.0f;
+  if (savHandS) savSeg(savHandS, savPtS, as, -58, SAV_FACE_R - 12);
+
+  if (savSecDot) {
+    float r = as * 0.01745329f;
+    int dr = SAV_FACE_R - 34;
+    lv_obj_align(savSecDot, LV_ALIGN_TOP_LEFT,
+                 SAV_CX + (int)(dr * sinf(r)) - 9,
+                 SAV_CY - (int)(dr * cosf(r)) - 9);
   }
 
   static uint8_t lastMin = 255;
@@ -3902,36 +4142,33 @@ static void saverUpdate() {
     lastMin = now.min;
     float am = now.min * 6.0f;
     float ah = ((now.hour % 12) * 30.0f) + (now.min * 0.5f);
-    // Shaft, then a short broad segment at the tip for the head.
-    // SKELETON hands: a wide bright line with a face-dark line
-    // over its middle leaves two long rails with a dark gap - and a
-    // FILLED triangle tip. The core stops short of the tip so the
-    // triangle stays solid.
-    // The core stops 6 px short of the outer rail, so the hand
-    // reads as an open rectangle rather than a filled bar.
-    if (savHandM) savSeg(savHandM, savPtM,  am, -34, SAV_R - 56);
-    if (savCoreM) savSeg(savCoreM, savPtMC, am, -22, SAV_R - 62);
-    if (savHandH) savSeg(savHandH, savPtH,  ah, -28, SAV_R - 110);
-    if (savCoreH) savSeg(savCoreH, savPtHC, ah, -16, SAV_R - 116);
+
+    if (savHandM) savSeg(savHandM, savPtM,  am, -28, SAV_FACE_R - 20);
+    if (savCoreM) savSeg(savCoreM, savPtMC, am, -16, SAV_FACE_R - 28);
+    if (savHandH) savSeg(savHandH, savPtH,  ah, -24, SAV_FACE_R - 74);
+    if (savCoreH) savSeg(savCoreH, savPtHC, ah, -12, SAV_FACE_R - 82);
 
     if (savDate) lv_label_set_text_fmt(savDate, "%u", now.day);
+    if (savDow) {
+      const char *d = kDow[now.dow <= 7 ? now.dow : 0];
+      lv_label_set_text(savDow, d);
+    }
   }
 
-  // A checksum only proves the bytes arrived intact. A reading
-  // outside this range is not a bedroom, so it is not shown as one.
   if (savTemp) {
     if (shtOK && shtTempC > -10.0f && shtTempC < 60.0f) {
-      // Whole degrees. The decimal went in TEST 045.
       char t[24]; snprintf(t, sizeof(t), "%.0f\xC2\xB0", shtTempC);
       lv_label_set_text(savTemp, t);
     } else lv_label_set_text(savTemp, "--");
   }
+
   if (savHum) {
     if (shtOK && shtRH >= 0.0f && shtRH <= 100.0f) {
       char t[16]; snprintf(t, sizeof(t), "%.0f%%", shtRH);
       lv_label_set_text(savHum, t);
     } else lv_label_set_text(savHum, "--");
   }
+
   if (savAlarmImg) {
     if (alarmOn) lv_obj_clear_flag(savAlarmImg, LV_OBJ_FLAG_HIDDEN);
     else         lv_obj_add_flag(savAlarmImg,   LV_OBJ_FLAG_HIDDEN);
@@ -3947,187 +4184,233 @@ static void saverExit(lv_event_t *e) {
   Serial.println("[saver] out");
 }
 
-// A glowing dot. 40 px across the core - Shemi doubled it from the
-// original 3 mm; at 6.65 px per mm this is about 6 mm.
-//
-// The glow is three concentric circles, wide and faint through to
-// the bright core. LVGL has no blur, and on a dark face this reads
-// as one.
-#define SAV_DOT 40
+static void savDot(lv_obj_t *par, int cx, int cy, int d) {
+  lv_obj_t *outer = lv_obj_create(par);
+  lv_obj_remove_style_all(outer);
+  lv_obj_set_size(outer, d + 8, d + 8);
+  lv_obj_set_style_radius(outer, LV_RADIUS_CIRCLE, 0);
+  lv_obj_set_style_bg_opa(outer, LV_OPA_COVER, 0);
+  lv_obj_set_style_bg_color(outer, lv_color_hex(0x444740), 0);
+  lv_obj_align(outer, LV_ALIGN_TOP_LEFT, cx - (d + 8)/2, cy - (d + 8)/2);
 
-static void savDot(lv_obj_t *par, int x, int y) {
-  static const struct { int d; uint32_t c; lv_opa_t a; } ring[3] = {
-    { SAV_DOT + 28, SAV_GLOW,  LV_OPA_30 },
-    { SAV_DOT + 14, SAV_GLOW,  LV_OPA_60 },
-    { SAV_DOT,      SAV_GREEN, LV_OPA_COVER },
-  };
-  for (int i = 0; i < 3; i++) {
-    lv_obj_t *o = lv_obj_create(par);
-    lv_obj_remove_style_all(o);
-    lv_obj_set_size(o, ring[i].d, ring[i].d);
-    lv_obj_set_style_radius(o, LV_RADIUS_CIRCLE, 0);
-    lv_obj_set_style_bg_color(o, lv_color_hex(ring[i].c), 0);
-    lv_obj_set_style_bg_opa(o, ring[i].a, 0);
-    lv_obj_clear_flag(o, LV_OBJ_FLAG_CLICKABLE);
-    lv_obj_align(o, LV_ALIGN_TOP_MID, x, y - ring[i].d / 2);
-  }
+  lv_obj_t *core = lv_obj_create(par);
+  lv_obj_remove_style_all(core);
+  lv_obj_set_size(core, d, d);
+  lv_obj_set_style_radius(core, LV_RADIUS_CIRCLE, 0);
+  lv_obj_set_style_bg_opa(core, LV_OPA_COVER, 0);
+  lv_obj_set_style_bg_color(core, lv_color_hex(SAV_GREEN), 0);
+  lv_obj_align(core, LV_ALIGN_TOP_LEFT, cx - d/2, cy - d/2);
 }
 
 static void buildSaver() {
   scrSaver = lv_obj_create(NULL);
-  lv_obj_set_style_bg_color(scrSaver, lv_color_hex(0x05080B), 0);
+  lv_obj_set_style_bg_color(scrSaver, lv_color_hex(0x01070C), 0);
   lv_obj_clear_flag(scrSaver, LV_OBJ_FLAG_SCROLLABLE);
-  // Any touch anywhere leaves. No hunting for a button at 3 am.
   lv_obj_add_event_cb(scrSaver, saverExit, LV_EVENT_PRESSED, NULL);
 
+  // 8 mm-looking gunmetal inner bezel/ring, centered exactly.
+  lv_obj_t *bezel = lv_obj_create(scrSaver);
+  lv_obj_remove_style_all(bezel);
+  lv_obj_set_size(bezel, SAV_R * 2, SAV_R * 2);
+  lv_obj_set_style_radius(bezel, LV_RADIUS_CIRCLE, 0);
+  lv_obj_set_style_bg_opa(bezel, LV_OPA_COVER, 0);
+  lv_obj_set_style_bg_color(bezel, lv_color_hex(SAV_RING), 0);
+  lv_obj_set_style_border_width(bezel, 8, 0);
+  lv_obj_set_style_border_color(bezel, lv_color_hex(SAV_RING_HI), 0);
+  lv_obj_align(bezel, LV_ALIGN_TOP_LEFT, SAV_CX - SAV_R, SAV_CY - SAV_R);
+
+  // Black minute-track ring inside the metal bezel.
+  lv_obj_t *track = lv_obj_create(scrSaver);
+  lv_obj_remove_style_all(track);
+  lv_obj_set_size(track, 440, 440);
+  lv_obj_set_style_radius(track, LV_RADIUS_CIRCLE, 0);
+  lv_obj_set_style_bg_opa(track, LV_OPA_COVER, 0);
+  lv_obj_set_style_bg_color(track, lv_color_hex(0x050607), 0);
+  lv_obj_align(track, LV_ALIGN_TOP_LEFT, SAV_CX - 220, SAV_CY - 220);
+
+  // Deep blue-black sunburst-like dial.
   lv_obj_t *face = lv_obj_create(scrSaver);
-  lv_obj_set_size(face, SAV_R * 2, SAV_R * 2);
-  lv_obj_align(face, LV_ALIGN_TOP_MID, 0, SAV_CY - SAV_R);
+  lv_obj_remove_style_all(face);
+  lv_obj_set_size(face, SAV_FACE_R * 2, SAV_FACE_R * 2);
   lv_obj_set_style_radius(face, LV_RADIUS_CIRCLE, 0);
-  lv_obj_set_style_bg_color(face, lv_color_hex(0x0B1218), 0);
-  lv_obj_set_style_bg_grad_color(face, lv_color_hex(0x05090D), 0);
+  lv_obj_set_style_bg_opa(face, LV_OPA_COVER, 0);
+  lv_obj_set_style_bg_color(face, lv_color_hex(SAV_FACE), 0);
+  lv_obj_set_style_bg_grad_color(face, lv_color_hex(SAV_FACE2), 0);
   lv_obj_set_style_bg_grad_dir(face, LV_GRAD_DIR_VER, 0);
-  lv_obj_set_style_border_color(face, lv_color_hex(0x1E3D30), 0);
-  lv_obj_set_style_border_width(face, 6, 0);
-  lv_obj_clear_flag(face, LV_OBJ_FLAG_SCROLLABLE);
-  lv_obj_clear_flag(face, LV_OBJ_FLAG_CLICKABLE);
+  lv_obj_align(face, LV_ALIGN_TOP_LEFT,
+               SAV_CX - SAV_FACE_R, SAV_CY - SAV_FACE_R);
 
-  // The ring of small ticks is gone with the numerals. One set of
-  // markers, not two.
+  // 60 minute ticks on the inner ring; 5-minute ticks are broader.
+  for (int i = 0; i < 60; ++i) {
+    const float a = i * 6.0f * 0.01745329f;
+    const int ro = 214;
+    const int ri = (i % 5 == 0) ? 195 : 203;
 
-  // The pip at TWELVE alone now - six is a pill like the others.
-  // Flat edge up, apex pointing down at the centre, drawn FILLED.
-  {
-    static lv_point_t pip[4];
-    int py = SAV_CY - (SAV_R - 22);
-    pip[0].x = SAV_CX - 20; pip[0].y = py;
-    pip[1].x = SAV_CX + 20; pip[1].y = py;
-    pip[2].x = SAV_CX;      pip[2].y = py + 34;
-    pip[3] = pip[0];
-    lv_obj_t *tri = lv_line_create(scrSaver);
-    lv_line_set_points(tri, pip, 4);
-    lv_obj_set_style_line_color(tri, lv_color_hex(SAV_GREEN), 0);
-    // A stroke wider than the triangle's own height FILLS it.
-    lv_obj_set_style_line_width(tri, 22, 0);
-    lv_obj_set_style_line_rounded(tri, true, 0);
-    lv_obj_clear_flag(tri, LV_OBJ_FLAG_CLICKABLE);
+    savRingPts[i][0].x = SAV_CX + (lv_coord_t)(ri * sinf(a));
+    savRingPts[i][0].y = SAV_CY - (lv_coord_t)(ri * cosf(a));
+    savRingPts[i][1].x = SAV_CX + (lv_coord_t)(ro * sinf(a));
+    savRingPts[i][1].y = SAV_CY - (lv_coord_t)(ro * cosf(a));
+
+    lv_obj_t *tick = lv_line_create(scrSaver);
+    lv_line_set_points(tick, savRingPts[i], 2);
+    lv_obj_set_style_line_color(tick,
+        lv_color_hex(i % 5 == 0 ? 0x7A7B76 : 0x4B4C49), 0);
+    lv_obj_set_style_line_width(tick, i % 5 == 0 ? 5 : 2, 0);
+    lv_obj_set_style_line_rounded(tick, false, 0);
+    lv_obj_clear_flag(tick, LV_OBJ_FLAG_CLICKABLE);
   }
 
-  // Marker plan after the five prompts: twelve is the filled pip,
-  // the date window sits at NINE (the left, as asked), pills lie at
-  // THREE and stand at SIX - both pointing at the centre, the way
-  // nine's did. Dots take 1, 2, 4, 5, 7, 8, 10, 11.
-  for (int n = 1; n <= 11; n++) {
+  // Lume hour markers: slightly smaller than the previous version.
+  for (int n = 1; n <= 11; ++n) {
     if (n == 3 || n == 6 || n == 9) continue;
     float a = n * 30.0f * 0.01745329f;
-    int nr = SAV_R - 52;
-    savDot(scrSaver, (int)(sinf(a) * nr), SAV_CY - (int)(cosf(a) * nr));
+    int rr = 166;
+    savDot(scrSaver,
+           SAV_CX + (int)(sinf(a) * rr),
+           SAV_CY - (int)(cosf(a) * rr),
+           27);
   }
 
-  // Three and NINE lying, six standing - nine gets its marker back,
-  // matching three, now that the date has moved off it.
+  // Twelve triangle.
   {
-    struct { int w, h, dx, dy; } pill[3] = {
-      { 56, 24,  (SAV_R - 52) - 28, -12 },          // three
-      { 24, 56,  -12,  (SAV_R - 52) - 28 },         // six
-      { 56, 24, -(SAV_R - 52) - 28, -12 },          // nine
+    static lv_point_t tri[4];
+    tri[0] = { (lv_coord_t)(SAV_CX - 21), (lv_coord_t)(SAV_CY - 184) };
+    tri[1] = { (lv_coord_t)(SAV_CX + 21), (lv_coord_t)(SAV_CY - 184) };
+    tri[2] = { (lv_coord_t)SAV_CX,        (lv_coord_t)(SAV_CY - 145) };
+    tri[3] = tri[0];
+
+    lv_obj_t *t = lv_line_create(scrSaver);
+    lv_line_set_points(t, tri, 4);
+    lv_obj_set_style_line_color(t, lv_color_hex(SAV_GREEN), 0);
+    lv_obj_set_style_line_width(t, 13, 0);
+    lv_obj_set_style_line_rounded(t, true, 0);
+  }
+
+  // 3, 6, 9 markers.
+  {
+    struct M { int x, y, w, h; } m[3] = {
+      { SAV_CX + 151, SAV_CY - 12, 46, 24 },
+      { SAV_CX - 12,  SAV_CY + 145, 24, 46 },
+      { SAV_CX - 197, SAV_CY - 12, 46, 24 }
     };
-    for (int i = 0; i < 3; i++) {
-      lv_obj_t *p = lv_obj_create(scrSaver);
-      lv_obj_remove_style_all(p);
-      lv_obj_set_size(p, pill[i].w, pill[i].h);
-      lv_obj_set_style_radius(p, 12, 0);
-      lv_obj_set_style_bg_opa(p, LV_OPA_COVER, 0);
-      lv_obj_set_style_bg_color(p, lv_color_hex(SAV_GREEN), 0);
-      lv_obj_clear_flag(p, LV_OBJ_FLAG_CLICKABLE);
-      lv_obj_align(p, LV_ALIGN_TOP_LEFT,
-                   SAV_CX + pill[i].dx, SAV_CY + pill[i].dy);
+    for (int i = 0; i < 3; ++i) {
+      lv_obj_t *o = lv_obj_create(scrSaver);
+      lv_obj_remove_style_all(o);
+      lv_obj_set_size(o, m[i].w, m[i].h);
+      lv_obj_set_style_radius(o, 8, 0);
+      lv_obj_set_style_bg_opa(o, LV_OPA_COVER, 0);
+      lv_obj_set_style_bg_color(o, lv_color_hex(SAV_GREEN), 0);
+      lv_obj_align(o, LV_ALIGN_TOP_LEFT, m[i].x, m[i].y);
     }
   }
 
-  // The date window: right hand side, MIDWAY between the centre and
-  // the three o'clock pill.
+  // Day + date window, pulled inward toward the center.
   {
     lv_obj_t *dw = lv_obj_create(scrSaver);
     lv_obj_remove_style_all(dw);
-    lv_obj_set_size(dw, 62, 44);
-    lv_obj_set_style_radius(dw, 6, 0);
+    lv_obj_set_size(dw, 118, 46);
+    lv_obj_set_style_radius(dw, 4, 0);
     lv_obj_set_style_bg_opa(dw, LV_OPA_COVER, 0);
-    lv_obj_set_style_bg_color(dw, lv_color_hex(0x0A0D11), 0);
-    lv_obj_set_style_border_width(dw, 2, 0);
-    lv_obj_set_style_border_color(dw, lv_color_hex(0x8A94A2), 0);
-    lv_obj_clear_flag(dw, LV_OBJ_FLAG_CLICKABLE);
-    lv_obj_align(dw, LV_ALIGN_TOP_LEFT,
-                 SAV_CX + (SAV_R - 52) / 2 - 31, SAV_CY - 22);
+    lv_obj_set_style_bg_color(dw, lv_color_hex(0xB9B8B0), 0);
+    lv_obj_set_style_border_width(dw, 3, 0);
+    lv_obj_set_style_border_color(dw, lv_color_hex(0x454642), 0);
+    lv_obj_align(dw, LV_ALIGN_TOP_LEFT, SAV_CX + 60, SAV_CY - 23);
 
     savDate = lv_label_create(dw);
     lv_label_set_text(savDate, "--");
     lv_obj_set_style_text_font(savDate, &lv_font_montserrat_26, 0);
-    lv_obj_set_style_text_color(savDate, lv_color_hex(0xE8ECF2), 0);
-    lv_obj_center(savDate);
+    lv_obj_set_style_text_color(savDate, lv_color_black(), 0);
+    lv_obj_align(savDate, LV_ALIGN_LEFT_MID, 12, 0);
+
+    savDow = lv_label_create(dw);
+    lv_label_set_text(savDow, "---");
+    lv_obj_set_style_text_font(savDow, &lv_font_montserrat_26, 0);
+    lv_obj_set_style_text_color(savDow, lv_color_black(), 0);
+    lv_obj_align(savDow, LV_ALIGN_RIGHT_MID, -8, 0);
   }
 
-  // Outer rail, dark core over it. No tip object - the core reaches
-  // almost to the end, so the hand is a hollow rectangle right to
-  // its square tip. Draw order carries the design.
-  //
-  // THIS BLOCK WAS DELETED BY MY OWN TEST 052 EDIT and the panel
-  // rebooted every time the screensaver opened.
+  // Realistic broad luminous hands + thin red seconds hand.
   savHandH = savHand(scrSaver, 20, SAV_HAND);
-  savCoreH = savHand(scrSaver, 12, 0x0B1218);
-  savHandM = savHand(scrSaver, 12, SAV_HAND);
-  savCoreM = savHand(scrSaver,  6, 0x0B1218);
-  savHandS = savHand(scrSaver,  3, 0xD03028);    // red, per Shemi
+  savCoreH = savHand(scrSaver, 12, SAV_GREEN);
+  savHandM = savHand(scrSaver, 14, SAV_HAND);
+  savCoreM = savHand(scrSaver,  8, SAV_GREEN);
+  savHandS = savHand(scrSaver,  3, SAV_RED);
 
-  // The lume dot that rides the second hand.
   savSecDot = lv_obj_create(scrSaver);
   lv_obj_remove_style_all(savSecDot);
-  lv_obj_set_size(savSecDot, 22, 22);
+  lv_obj_set_size(savSecDot, 18, 18);
   lv_obj_set_style_radius(savSecDot, LV_RADIUS_CIRCLE, 0);
   lv_obj_set_style_bg_opa(savSecDot, LV_OPA_COVER, 0);
-  lv_obj_set_style_bg_color(savSecDot, lv_color_hex(SAV_GREEN), 0);
+  lv_obj_set_style_bg_color(savSecDot, lv_color_hex(SAV_GREEN2), 0);
   lv_obj_set_style_border_width(savSecDot, 2, 0);
-  lv_obj_set_style_border_color(savSecDot, lv_color_hex(0xE8E2D4), 0);
-  lv_obj_clear_flag(savSecDot, LV_OBJ_FLAG_CLICKABLE);
+  lv_obj_set_style_border_color(savSecDot, lv_color_hex(SAV_RED), 0);
 
   lv_obj_t *pin = lv_obj_create(scrSaver);
   lv_obj_remove_style_all(pin);
   lv_obj_set_size(pin, 18, 18);
   lv_obj_set_style_radius(pin, LV_RADIUS_CIRCLE, 0);
   lv_obj_set_style_bg_opa(pin, LV_OPA_COVER, 0);
-  lv_obj_set_style_bg_color(pin, lv_color_hex(SAV_GREEN), 0);
-  lv_obj_clear_flag(pin, LV_OBJ_FLAG_CLICKABLE);
-  lv_obj_align(pin, LV_ALIGN_TOP_MID, 0, SAV_CY - 9);
+  lv_obj_set_style_bg_color(pin, lv_color_hex(SAV_RED), 0);
+  lv_obj_align(pin, LV_ALIGN_TOP_LEFT, SAV_CX - 9, SAV_CY - 9);
 
-  // SWAPPED per the last prompt: temperature RIGHT, humidity LEFT.
-  // 48 point is the largest font in this build, so the extra step
-  // of size comes from transform zoom - 320/256 is 25 percent up,
-  // rendered scaled.
-  savTemp = lv_label_create(scrSaver);
-  lv_label_set_text(savTemp, "--");
-  lv_obj_set_style_text_font(savTemp, &lv_font_montserrat_48, 0);
-  lv_obj_set_style_text_color(savTemp, lv_color_hex(SAV_GREEN), 0);
-  lv_obj_set_style_transform_zoom(savTemp, 320, 0);
-  lv_obj_align(savTemp, LV_ALIGN_TOP_RIGHT, -52, 34);
+  // Panel identity only; same visual design on both.
+  savName = lv_label_create(scrSaver);
+  lv_label_set_text(savName, PANEL_ID == 1 ? "ימש" : "אריע");
+  lv_obj_set_style_text_font(savName, &font_hebrew_28, 0);
+  lv_obj_set_style_text_color(savName, lv_color_hex(0xA5161C), 0);
+  lv_obj_align(savName, LV_ALIGN_TOP_LEFT, SAV_CX - 45, SAV_CY + 82);
 
+  // Night readouts, same lume colour as hour markers.
   savHum = lv_label_create(scrSaver);
   lv_label_set_text(savHum, "--");
   lv_obj_set_style_text_font(savHum, &lv_font_montserrat_48, 0);
   lv_obj_set_style_text_color(savHum, lv_color_hex(SAV_GREEN), 0);
-  lv_obj_set_style_transform_zoom(savHum, 320, 0);
-  lv_obj_align(savHum, LV_ALIGN_TOP_LEFT, 52, 34);
+  lv_obj_align(savHum, LV_ALIGN_TOP_LEFT, 62, 22);
 
-  // The same 160x160 photograph, drawn small. No second asset.
+  // Humidity: three rain drops, clearer than one isolated drop.
+  const int dropX[3] = { 12, 27, 42 };
+  const int dropY[3] = { 31, 42, 31 };
+  for (int di = 0; di < 3; ++di) {
+    lv_obj_t *drop = lv_obj_create(scrSaver);
+    lv_obj_remove_style_all(drop);
+    lv_obj_set_size(drop, 13, 18);
+    lv_obj_set_style_radius(drop, LV_RADIUS_CIRCLE, 0);
+    lv_obj_set_style_bg_opa(drop, LV_OPA_COVER, 0);
+    lv_obj_set_style_bg_color(drop, lv_color_hex(SAV_GREEN), 0);
+    lv_obj_align(drop, LV_ALIGN_TOP_LEFT, dropX[di], dropY[di]);
+  }
+
+  savTemp = lv_label_create(scrSaver);
+  lv_label_set_text(savTemp, "--");
+  lv_obj_set_style_text_font(savTemp, &lv_font_montserrat_48, 0);
+  lv_obj_set_style_text_color(savTemp, lv_color_hex(SAV_GREEN), 0);
+  lv_obj_align(savTemp, LV_ALIGN_TOP_RIGHT, -54, 22);
+
+  // Thermometer on the RIGHT side of the temperature, at the screen edge.
+  lv_obj_t *thermStem = lv_obj_create(scrSaver);
+  lv_obj_remove_style_all(thermStem);
+  lv_obj_set_size(thermStem, 10, 30);
+  lv_obj_set_style_radius(thermStem, 5, 0);
+  lv_obj_set_style_border_width(thermStem, 2, 0);
+  lv_obj_set_style_border_color(thermStem, lv_color_hex(SAV_GREEN), 0);
+  lv_obj_align(thermStem, LV_ALIGN_TOP_RIGHT, -18, 26);
+
+  lv_obj_t *thermBulb = lv_obj_create(scrSaver);
+  lv_obj_remove_style_all(thermBulb);
+  lv_obj_set_size(thermBulb, 18, 18);
+  lv_obj_set_style_radius(thermBulb, LV_RADIUS_CIRCLE, 0);
+  lv_obj_set_style_border_width(thermBulb, 2, 0);
+  lv_obj_set_style_border_color(thermBulb, lv_color_hex(SAV_GREEN), 0);
+  lv_obj_align(thermBulb, LV_ALIGN_TOP_RIGHT, -14, 50);
+
   savAlarmImg = lv_img_create(scrSaver);
   lv_img_set_src(savAlarmImg, &img_alarm_on);
-  lv_img_set_zoom(savAlarmImg, 96);            // 96/256, about 60 px
-  lv_obj_align(savAlarmImg, LV_ALIGN_BOTTOM_RIGHT, -30, -20);
-  lv_obj_clear_flag(savAlarmImg, LV_OBJ_FLAG_CLICKABLE);
+  lv_img_set_zoom(savAlarmImg, 80);
+  lv_obj_align(savAlarmImg, LV_ALIGN_BOTTOM_RIGHT, -22, -16);
   lv_obj_add_flag(savAlarmImg, LV_OBJ_FLAG_HIDDEN);
 
   saverUpdate();
 }
-
 static void saverEnter() {
   if (saverOn || saverAfterMs == 0) return;
   if (!scrSaver) { buildSaver(); lvMem("saver"); }
@@ -4725,7 +5008,7 @@ static void buildHome() {
   lv_obj_add_event_cb(scrHome, evAnyPress, LV_EVENT_PRESSED, NULL);
 
   lv_obj_t *title = lv_label_create(scrHome);
-  lv_label_set_text(title, TITLE_HOME);
+  lv_label_set_text(title, PANEL_ID == 1 ? "ימש" : "אריע");
   lv_obj_set_style_text_font(title, &font_hebrew_28, 0);
   lv_obj_set_style_text_color(title, lv_color_white(), 0);
   lv_obj_align(title, LV_ALIGN_TOP_LEFT, 24, 20);
@@ -4827,10 +5110,18 @@ static void buildHome() {
 
 void setup() {
   Serial.begin(115200);
+  RS485.begin(RS485_BAUD, SERIAL_8N1, RS485_RX_PIN, RS485_TX_PIN);
+  delay(100);
+  while (RS485.available()) RS485.read();
+#if PANEL_ID == 1
+  Serial.println("RS485 clock source: RX GPIO15 TX GPIO16 115200");
+#else
+  Serial.println("RS485 remote clock: RX GPIO15 TX GPIO16 115200");
+#endif
   delay(500);
 
   Serial.println();
-  Serial.println("=== PANEL SHEMI - TEST 056 - screensaver hands restored ===");
+  Serial.println("=== PANEL SHEMI - TEST 066 - MATCHED PAIR + SEIKO NIGHT SCREENSAVER ===");
   Serial.printf("psram: %lu free of %lu\n",
                 (unsigned long)ESP.getFreePsram(),
                 (unsigned long)ESP.getPsramSize());
@@ -5015,6 +5306,11 @@ static void printHelp() {
 }
 
 void loop() {
+#if PANEL_ID == 1
+  rs485ClockSendTick();
+#else
+  rs485ClockPoll();
+#endif
   static String line = "";
 
   while (Serial.available()) {
@@ -5112,5 +5408,5 @@ void loop() {
 }
 
 // ============================================================
-// END OF FILE - PANEL SHEMI - TEST 056 (screensaver hands restored)
+// END PANEL IRA - TEST 083 - 7B FULL UI + RS485 REMOTE CLOCK
 // ============================================================
