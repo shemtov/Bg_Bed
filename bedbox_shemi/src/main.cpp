@@ -1,175 +1,341 @@
-// BED BOX FIRMWARE - TEST 012
-// QuinLED-ESP32 (WROOM-32E) - one bed, 6 motors, 3x L298N
-// TEST 012 - reports its zone levels back up the wire
+// ============================================================
+// BED BOX SHEMI - TEST 024
+// QuinLED-ESP32 (WROOM-32E) - 6 motors + RS485 + 7 RGBW NeoPixels
+// ============================================================
 //
-// WHAT CHANGED vs TEST 011
-//   The link is two-way now. Whenever a zone's level changes the box
-//   sends one frame up to the panel:  {bedId, 20, zone, level}.
-//   That is what lets the panel's sliders follow a running pattern
-//   instead of sitting still - the panel has never known what the
-//   pattern was doing, because nothing ever told it.
-//   Sent at most every REPORT_MS, and only for zones that actually
-//   moved, so the line stays quiet when nothing is happening.
+// TEST 024
+// - Diagnostic LED behavior redesigned for closed-loop testing.
+// - Startup: ALL 7 LEDs flash RED twice.
+// - Bus alive: ONE GREEN LED scans back-and-forth.
+// - Bus silent for 2 seconds: ONE RED LED scans back-and-forth.
+// - Valid massage command Panel -> BedBox: 3-BLUE train moves LEFT-to-RIGHT.
+// - BedBox feedback -> Panel: 3-YELLOW train moves RIGHT-to-LEFT.
+// - If feedback is transmitted during the blue command indication, yellow is
+//   queued and starts immediately after blue, so both directions are visible.
+// - A5 TIME/ACK traffic keeps the communication-alive indication green but does
+//   NOT trigger the blue command train.
+// - Bad A5 checksum: all 7 LEDs flash RED briefly.
+// - Motor control, pattern engine, RS485 parser, GPIO mapping and RGBW format
+//   are unchanged from TEST023.
+// - NOT YET RUN ON HARDWARE.
 //
-// WHAT CHANGED in TEST 011 vs TEST 010
-//   1. BOOT_SELFTEST. On power-up the board sweeps every motor in turn,
-//      one at a time, and REPEATS the pass every few seconds until you
-//      press a key. Nothing has to be typed for the motors to move, so
-//      this separates a wiring fault from a console fault. Set
-//      BOOT_SELFTEST to 0 once the motors are proven.
-//   2. The banner is reprinted at the top of every self-test pass, so
-//      you can open the monitor at any moment and still see it.
-//   3. The console now accepts a line ending in CR, LF or both, and
-//      ignores empty lines. TEST 010 only acted on LF, so a monitor
-//      that sends CR alone left the text hanging and the next line
-//      arrived joined to it - which is why help kept appearing.
-//   4. An unrecognised command is echoed back in quotes with its byte
-//      count, so we can see exactly what reached the board.
+// TEST 023
+// - Full BedBox Shemi system restored after the standalone LED tests.
+// - Exactly 7 physical NeoPixels.
+// - IMPORTANT FIX proven by TEST022: LEDs are RGBW, so use NEO_GRBW (32-bit),
+//   not NEO_GRB (24-bit).
+// - NeoPixel DATA = GPIO23 through the external 3.3V -> 5V level shifter.
+// - Startup: ALL 7 LEDs flash RED twice.
+// - Normal: a train of 3 GREEN LEDs moves continuously right-to-left.
+// - Valid received A5/14-byte frame: the SAME train turns YELLOW briefly.
+// - BedBox transmission: the SAME train turns BLUE briefly.
+// - Bad A5 checksum: all 7 LEDs flash RED briefly.
+// - RS485 parser and motor/pattern behavior are restored from TEST018.
+// - USB Serial diagnostics remain active.
 //
-// WHAT CHANGED in TEST 010 vs TEST 009
-//   Renamed local constants that collided with Arduino macros. LOW is
-//   #defined as 0 by Arduino.h, so  const int LOW = ...  expanded to
-//   const int 0 = ...  and failed. IN, OUT, HOLD and REST were renamed
-//   at the same time for the same reason, before they bite too.
+// TEST022 proved the RGBW LED format and GPIO23+level-shifter path on hardware.
+// TEST023 full-system integration is NOT proven until built/uploaded/tested.
 //
-// WHAT CHANGED in TEST 009 vs TEST 008
-//   Core 3.x removed ledcSetup() and ledcAttachPin(). The replacement is
-//   ledcAttach(pin, freq, resolution), and from then on ledcWrite() takes
-//   the PIN NUMBER, not a channel number. Core 2.x has the old pair and
-//   ledcWrite() takes a channel. Rather than pin the platform and hope,
-//   this file detects the core at compile time and uses whichever exists.
-//   Nothing else changed - the pattern engine and the UART link are the same.
+// // WIRING
+// NeoPixels: +5V -> 5V, GND -> GND, DIN <- HV1 of external level shifter; GPIO23 -> LV1.
+// RS485 module TTL side:
+//   VCC -> 5V, GND -> GND, TXD -> GPIO16, RXD -> GPIO17.
+// RS485 bus side: A+ -> A, B- -> B, Earth -> common GND.
 //
-// WHAT CHANGED vs TEST 007
-//   1. Serial2 receiver on RX=16 TX=17. Four-byte frames from the panel now
-//      reach handleMessage(). Every frame is printed on the USB console.
-//   2. The auto demo NO LONGER starts by itself. Type  demo  to run it.
-//   3. loadState() is finally called in setup(). TEST 007 defined it and
-//      never called it, so the bed box never actually resumed on power-on.
-//   4. Six motors, not eight. New layout:
-//        m0 pin 13  head left    small   \  driver 1
-//        m1 pin 14  head right   small   /
-//        m2 pin 18  upper back   BIG     \  driver 2
-//        m3 pin 19  lower back   BIG     /
-//        m4 pin 21  leg left     small   \  driver 3
-//        m5 pin 22  leg right    small   /
-//   5. A non-blocking pattern engine with cross-fading, and eleven patterns.
-//   6. MY_BED_ID and MOTORS_PRESENT are single constants at the top.
-//
-// WIRING
-//   Each L298N: 12V to VS, common ground with the QuinLED, IN1/IN3 to GND,
-//   IN2/IN4 to +5V (single direction). Only ENA/ENB go to the ESP32.
-//   Panel link: 3 wires, crossed. Panel TX -> our RX 16, panel RX <- our TX 17,
-//   ground shared. 5V is NEVER connected between the two boards.
-//
-// CONSOLE (USB, 115200)
-//   motor M N | zone Z N | all N | preset P [N] | timer MIN | off
-//   demo | calib M | status | link
+// ============================================================
 
 #include <Arduino.h>
 #include <Preferences.h>
+#include <Adafruit_NeoPixel.h>
 
-#define TEST_NUMBER 12
+#define TEST_NUMBER 24
 
-// Set to 0 once the motors are proven. While it is 1 the board sweeps all
-// motors on power-up and keeps repeating until a key is pressed.
 #define BOOT_SELFTEST 0
 
-// Arduino core 2.x drives LEDC by channel number, core 3.x by pin number.
-// Detect once here so the rest of the file never has to care.
 #if defined(ESP_ARDUINO_VERSION_MAJOR) && ESP_ARDUINO_VERSION_MAJOR >= 3
   #define LEDC_BY_PIN 1
 #else
   #define LEDC_BY_PIN 0
 #endif
 
-// ---------------- What is physically connected ----------------
-const uint8_t MY_BED_ID      = 1;   // this box answers to bedId 1 (and 0 = all)
+// ---------------- Physical configuration ----------------
+const uint8_t MY_BED_ID      = 1;
 const int     NUM_MOTORS     = 6;
-const int     MOTORS_PRESENT = 6;   // lower this if fewer are wired
+const int     MOTORS_PRESENT = 6;
 
-const int  MOTOR_PIN[NUM_MOTORS]  = {13, 14, 18, 19, 21, 22};
-const int  MOTOR_ZONE[NUM_MOTORS] = { 0,  0,  1,  2,  3,  3};
-const int  MOTOR_BIG[NUM_MOTORS]  = { 0,  0,  1,  1,  0,  0};  // 1 = big 0.3A
+const int MOTOR_PIN[NUM_MOTORS]  = {13, 14, 18, 19, 21, 22};
+const int MOTOR_ZONE[NUM_MOTORS] = { 0,  0,  1,  2,  3,  3};
+const int MOTOR_BIG[NUM_MOTORS]  = { 0,  0,  1,  1,  0,  0};
 
 const int   NUM_ZONES = 4;
 const char* ZONE_NAME[NUM_ZONES] = {"Head", "UpperBack", "LowerBack", "Legs"};
 
-// Named motors, for readability inside the patterns
 const int HEAD_L = 0, HEAD_R = 1, BACK_U = 2, BACK_L = 3, LEG_L = 4, LEG_R = 5;
 
 // ---------------- PWM ----------------
-const int PWM_FREQ = 20000;   // 20 kHz, silent
-const int PWM_RES  = 8;       // duty 0..255
+const int PWM_FREQ = 20000;
+const int PWM_RES  = 8;
 
-// ---------------- Calibration ----------------
-int       MIN_DUTY_SMALL = 60;    // measured cold-start ~55
-int       MIN_DUTY_BIG   = 165;   // measured cold-start ~165-180
-const int KICK_MS        = 60;    // kick-start, direct commands only
+int       MIN_DUTY_SMALL = 60;
+int       MIN_DUTY_BIG   = 165;
+const int KICK_MS        = 60;
 
-// ---------------- Pattern engine tuning ----------------
-const int TICK_MS     = 20;   // engine rate
-const int RAMP_STEP   = 4;    // level units per tick -> 0..100 in ~500 ms
-const int FLOOR_LEVEL = 0;    // raise to 4-6 if starts feel too abrupt
+const int TICK_MS     = 20;
+const int RAMP_STEP   = 4;
+const int FLOOR_LEVEL = 0;
 
-// ---------------- UART link ----------------
+// ---------------- UART / RS485 ----------------
 const int UART_RX = 16;
 const int UART_TX = 17;
-const unsigned long FRAME_GAP_MS = 50;   // resync gap between frames
+const unsigned long FRAME_GAP_MS = 50;
+
+// ---------------- NeoPixel diagnostics ----------------
+const int NEO_PIN   = 23;
+const int NEO_COUNT = 7;
+const uint8_t NEO_BRIGHTNESS = 45;
+
+Adafruit_NeoPixel pixels(NEO_COUNT, NEO_PIN, NEO_GRBW + NEO_KHZ800);
+
+enum LedEvent {
+  LED_EVT_NONE = 0,
+  LED_EVT_COMMAND,    // Panel -> BedBox, BLUE, left-to-right
+  LED_EVT_FEEDBACK,   // BedBox -> Panel, YELLOW, right-to-left
+  LED_EVT_FAULT
+};
+
+LedEvent ledEvent = LED_EVT_NONE;
+unsigned long ledEventUntil = 0;
+unsigned long ledStepAt = 0;
+
+// Idle scanner: exactly ONE pixel bounces between the ends.
+int idlePixel = 0;
+int idleDir   = +1;
+
+// Event train head. It is reset when an event starts so direction is obvious.
+int eventHead = 0;
+bool feedbackPending = false;
+
+// Communication is considered alive after any VALID received A5 or legacy frame.
+// TIME/ACK therefore keep this green even when no massage command is being sent.
+unsigned long lastValidCommMs = 0;
+bool haveValidComm = false;
+
+const unsigned long LED_STEP_MS       = 120;
+const unsigned long COMMAND_HOLD_MS   = 520;
+const unsigned long FEEDBACK_HOLD_MS  = 520;
+const unsigned long FAULT_HOLD_MS     = 900;
+const unsigned long COMM_TIMEOUT_MS   = 2000;
+
+uint32_t C_RED, C_GREEN, C_YELLOW, C_BLUE, C_WHITE, C_OFF;
+
+void noteValidCommunication() {
+  haveValidComm = true;
+  lastValidCommMs = millis();
+}
+
+void startLedEvent(LedEvent e, unsigned long holdMs) {
+  ledEvent = e;
+  ledEventUntil = millis() + holdMs;
+  ledStepAt = millis();
+
+  if (e == LED_EVT_COMMAND) {
+    eventHead = 0;                 // start at left, move right
+  } else if (e == LED_EVT_FEEDBACK) {
+    eventHead = NEO_COUNT - 1;     // start at right, move left
+  }
+}
+
+void showCommandTx() {
+  // A new command should always be visible as BLUE first.
+  feedbackPending = false;
+  startLedEvent(LED_EVT_COMMAND, COMMAND_HOLD_MS);
+}
+
+void showFeedbackTx() {
+  // A feedback report often follows the command almost immediately.
+  // Queue yellow behind blue instead of overwriting blue before it can be seen.
+  if (ledEvent == LED_EVT_COMMAND) {
+    feedbackPending = true;
+    return;
+  }
+  startLedEvent(LED_EVT_FEEDBACK, FEEDBACK_HOLD_MS);
+}
+
+void setFaultEvent() {
+  feedbackPending = false;
+  startLedEvent(LED_EVT_FAULT, FAULT_HOLD_MS);
+}
+
+void startupLedTest() {
+  // Hardware-proven RGBW chain: exactly 7 physical NeoPixels.
+  // All seven flash RED twice at startup.
+  for (int pass = 0; pass < 2; pass++) {
+    pixels.fill(C_RED);
+    pixels.show();
+    delay(500);
+
+    pixels.clear();
+    pixels.show();
+    delay(300);
+  }
+
+  pixels.clear();
+  pixels.show();
+  delay(250);
+}
+
+void updateDiagnostics() {
+  const unsigned long now = millis();
+
+  // Finish a temporary event. Feedback queued during BLUE starts next.
+  if (ledEvent != LED_EVT_NONE && (long)(now - ledEventUntil) >= 0) {
+    if (ledEvent == LED_EVT_COMMAND && feedbackPending) {
+      feedbackPending = false;
+      startLedEvent(LED_EVT_FEEDBACK, FEEDBACK_HOLD_MS);
+    } else {
+      ledEvent = LED_EVT_NONE;
+    }
+  }
+
+  // Advance animation only on its timing tick.
+  if ((long)(now - ledStepAt) >= 0) {
+    ledStepAt = now + LED_STEP_MS;
+
+    if (ledEvent == LED_EVT_COMMAND) {
+      eventHead++;
+      if (eventHead >= NEO_COUNT) eventHead = 0;
+    }
+    else if (ledEvent == LED_EVT_FEEDBACK) {
+      eventHead--;
+      if (eventHead < 0) eventHead = NEO_COUNT - 1;
+    }
+    else if (ledEvent == LED_EVT_NONE) {
+      idlePixel += idleDir;
+      if (idlePixel >= NEO_COUNT - 1) {
+        idlePixel = NEO_COUNT - 1;
+        idleDir = -1;
+      } else if (idlePixel <= 0) {
+        idlePixel = 0;
+        idleDir = +1;
+      }
+    }
+  }
+
+  pixels.clear();
+
+  if (ledEvent == LED_EVT_FAULT) {
+    bool on = ((now / 140) & 1) == 0;
+    if (on) pixels.fill(C_RED);
+    pixels.show();
+    return;
+  }
+
+  if (ledEvent == LED_EVT_COMMAND) {
+    // 3-pixel BLUE train, LEFT -> RIGHT.
+    for (int i = 0; i < 3; i++) {
+      int p = eventHead - i;
+      while (p < 0) p += NEO_COUNT;
+      pixels.setPixelColor(p, C_BLUE);
+    }
+    pixels.show();
+    return;
+  }
+
+  if (ledEvent == LED_EVT_FEEDBACK) {
+    // 3-pixel YELLOW train, RIGHT -> LEFT.
+    for (int i = 0; i < 3; i++) {
+      int p = eventHead + i;
+      while (p >= NEO_COUNT) p -= NEO_COUNT;
+      pixels.setPixelColor(p, C_YELLOW);
+    }
+    pixels.show();
+    return;
+  }
+
+  // Idle: exactly ONE pixel. GREEN = recent valid communication,
+  // RED = no valid communication for COMM_TIMEOUT_MS (or none since boot).
+  const bool commAlive = haveValidComm && (now - lastValidCommMs <= COMM_TIMEOUT_MS);
+  pixels.setPixelColor(idlePixel, commAlive ? C_GREEN : C_RED);
+  pixels.show();
+}
 
 // ---------------- Protocol ----------------
-enum Cmd { CMD_OFF = 0, CMD_ALL = 1, CMD_ZONE = 2,
-           CMD_MOTOR = 3, CMD_PRESET = 4, CMD_TIMER = 5 };
+enum Cmd {
+  CMD_OFF = 0,
+  CMD_ALL = 1,
+  CMD_ZONE = 2,
+  CMD_MOTOR = 3,
+  CMD_PRESET = 4,
+  CMD_TIMER = 5
+};
 
-// Uplink only - the panel listens for this, the bed boxes never send
-// anything else. Keeping it well above the downlink numbers means a
-// stray echo can never be mistaken for a command.
 const uint8_t RPT_LEVEL = 20;
-const unsigned long REPORT_MS = 150;   // fastest we will speak
-const int REPORT_STEP = 2;             // ignore changes smaller than this
+const unsigned long REPORT_MS = 150;
+const int REPORT_STEP = 2;
 
 // ---------------- Patterns ----------------
 enum Pattern {
-  PAT_WATERFALL = 0,   // head down to legs
-  PAT_RISE      = 1,   // legs up to head
-  PAT_ROCK      = 2,   // down and up, no pause
-  PAT_DIAGONAL  = 3,   // head left + leg right, then the other diagonal
-  PAT_SIDE      = 4,   // whole left side, then whole right side
-  PAT_CIRCLE    = 5,   // around the body
-  PAT_KNEAD     = 6,   // the two spine motors alternating
-  PAT_PULSE     = 7,   // two beats then quiet
-  PAT_BREATHE   = 8,   // one slow rise and fall, everything together
-  PAT_RAIN      = 9,   // short random taps
-  PAT_SHUFFLE   = 10,  // random zone, level and duration
+  PAT_WATERFALL = 0,
+  PAT_RISE      = 1,
+  PAT_ROCK      = 2,
+  PAT_DIAGONAL  = 3,
+  PAT_SIDE      = 4,
+  PAT_CIRCLE    = 5,
+  PAT_KNEAD     = 6,
+  PAT_PULSE     = 7,
+  PAT_BREATHE   = 8,
+  PAT_RAIN      = 9,
+  PAT_SHUFFLE   = 10,
   PAT_COUNT     = 11
 };
+
 const char* PATTERN_NAME[PAT_COUNT] = {
   "Waterfall", "Rise", "Rock", "Diagonal", "Side", "Circle",
   "Knead", "Pulse", "Breathe", "Rain", "Shuffle"
 };
 
 // ---------------- State ----------------
-int  motorLevel[NUM_MOTORS];        // what is actually driven now
-int  tgtLevel[NUM_MOTORS];          // where the pattern wants it
-unsigned long timerEndMs  = 0;
-unsigned long nextTickMs  = 0;
-unsigned long stepAtMs    = 0;
-unsigned long patStartMs  = 0;
-int  activePreset = -1;
-int  presetLevel  = 60;
-int  phase        = 0;
-bool demoActive   = false;          // TEST 008: no longer auto-starts
+int motorLevel[NUM_MOTORS];
+int tgtLevel[NUM_MOTORS];
+
+unsigned long timerEndMs = 0;
+unsigned long nextTickMs = 0;
+unsigned long stepAtMs   = 0;
+unsigned long patStartMs = 0;
+
+int activePreset = -1;
+int presetLevel  = 60;
+int phase        = 0;
+bool demoActive  = false;
+
 Preferences prefs;
 
-int      lastSentZone[NUM_ZONES];
+int lastSentZone[NUM_ZONES];
 unsigned long lastReportMs = 0;
 
-uint8_t  frame[4];
-int      frameLen     = 0;
+const int A5_FRAME_LEN = 14;
+uint8_t a5Frame[A5_FRAME_LEN];
+int a5Len = 0;
+bool collectingA5 = false;
+
+uint8_t legacyBuf[4];
+int legacyLen = 0;
+
 unsigned long lastByteMs = 0;
-uint8_t  lastFrame[4]  = {0, 0, 0, 0};
+
+uint8_t lastFrame[14] = {0};
+int lastFrameLen = 0;
 unsigned long lastFrameMs = 0;
-long     framesSeen   = 0;
+
+long a5FramesSeen = 0;
+long timeFramesSeen = 0;
+long ackFramesSeen = 0;
+long legacyFramesSeen = 0;
+long checksumFaults = 0;
+long rxBytesSeen = 0;
+long txFrames = 0;
+
+unsigned long nextAlivePrint = 0;
 
 // ---------------- Forward declarations ----------------
 int  levelToDuty(int m, int level);
@@ -187,6 +353,8 @@ void runCalib(int m);
 void printStatus();
 void printLink();
 void handleLine(String line);
+void processA5Frame();
+void processLegacyPacket();
 void pollUart();
 void reportLevels();
 void demoSet(int m, int level);
@@ -196,13 +364,13 @@ void runDemoPass();
 void stopDemoToManual();
 
 // ============================================================
-//  Low level
+// Low level
 // ============================================================
 void pwmWrite(int m, int duty) {
 #if LEDC_BY_PIN
-  ledcWrite(MOTOR_PIN[m], duty);      // core 3.x addresses the pin
+  ledcWrite(MOTOR_PIN[m], duty);
 #else
-  ledcWrite(m, duty);                 // core 2.x addresses the channel
+  ledcWrite(m, duty);
 #endif
 }
 
@@ -213,14 +381,16 @@ int levelToDuty(int m, int level) {
   return minDuty + (255 - minDuty) * (level - 1) / 99;
 }
 
-// Direct command: uses the kick-start, because it must start instantly.
 void setMotor(int m, int level) {
   if (m < 0 || m >= MOTORS_PRESENT) return;
   bool wasOff = (motorLevel[m] == 0);
   motorLevel[m] = constrain(level, 0, 100);
   tgtLevel[m]   = motorLevel[m];
   int duty = levelToDuty(m, motorLevel[m]);
-  if (duty > 0 && wasOff && duty < 255) { pwmWrite(m, 255); delay(KICK_MS); }
+  if (duty > 0 && wasOff && duty < 255) {
+    pwmWrite(m, 255);
+    delay(KICK_MS);
+  }
   pwmWrite(m, duty);
 }
 
@@ -235,65 +405,197 @@ void setAll(int level) {
 
 void allOff() {
   activePreset = -1;
-  timerEndMs   = 0;
-  for (int m = 0; m < NUM_MOTORS; m++) { tgtLevel[m] = 0; }
+  timerEndMs = 0;
+  for (int m = 0; m < NUM_MOTORS; m++) tgtLevel[m] = 0;
   setAll(0);
 }
 
-// Pattern target helpers, no kick-start - the ramp does the work.
 void tgtMotor(int m, int level) {
-  if (m >= 0 && m < MOTORS_PRESENT) tgtLevel[m] = constrain(level, 0, 100);
+  if (m >= 0 && m < MOTORS_PRESENT)
+    tgtLevel[m] = constrain(level, 0, 100);
 }
+
 void tgtZone(int z, int level) {
   for (int m = 0; m < MOTORS_PRESENT; m++)
     if (MOTOR_ZONE[m] == z) tgtLevel[m] = constrain(level, 0, 100);
 }
+
 void tgtAll(int level) {
-  for (int m = 0; m < MOTORS_PRESENT; m++) tgtLevel[m] = constrain(level, 0, 100);
+  for (int m = 0; m < MOTORS_PRESENT; m++)
+    tgtLevel[m] = constrain(level, 0, 100);
 }
 
 // ============================================================
-//  Protocol
+// Protocol
 // ============================================================
 void handleMessage(uint8_t bedId, uint8_t cmd, uint8_t target, uint8_t value) {
   if (bedId != MY_BED_ID && bedId != 0) return;
+
   switch (cmd) {
-    case CMD_OFF:   allOff();                                     break;
-    case CMD_ALL:   activePreset = -1; setAll(value);             break;
-    case CMD_ZONE:  activePreset = -1; setZone(target, value);    break;
-    case CMD_MOTOR: activePreset = -1; setMotor(target, value);   break;
-    case CMD_PRESET: startPattern(target, value ? value : 60);    break;
-    case CMD_TIMER: timerEndMs = millis() + (unsigned long)value * 60000UL; break;
+    case CMD_OFF:    allOff(); break;
+    case CMD_ALL:    activePreset = -1; setAll(value); break;
+    case CMD_ZONE:   activePreset = -1; setZone(target, value); break;
+    case CMD_MOTOR:  activePreset = -1; setMotor(target, value); break;
+    case CMD_PRESET: startPattern(target, value ? value : 60); break;
+    case CMD_TIMER:  timerEndMs = millis() + (unsigned long)value * 60000UL; break;
     default: return;
   }
+
   saveState();
 }
 
 // ============================================================
-//  UART receiver - four bytes, resynced by a quiet gap
+// UART / RS485 receiver
 // ============================================================
+uint8_t xorChecksum(const uint8_t* data, int len) {
+  uint8_t x = 0;
+  for (int i = 0; i < len; i++) x ^= data[i];
+  return x;
+}
+
+void processA5Frame() {
+  if (a5Len != A5_FRAME_LEN) return;
+
+  uint8_t calc = xorChecksum(a5Frame, 13);
+  uint8_t got  = a5Frame[13];
+
+  if (calc != got) {
+    checksumFaults++;
+    setFaultEvent();
+    Serial.printf("[RS485 A5 BAD CRC] calc=%02X got=%02X :", calc, got);
+    for (int i = 0; i < A5_FRAME_LEN; i++) Serial.printf(" %02X", a5Frame[i]);
+    Serial.println();
+    return;
+  }
+
+  a5FramesSeen++;
+  memcpy(lastFrame, a5Frame, A5_FRAME_LEN);
+  lastFrameLen = A5_FRAME_LEN;
+  lastFrameMs = millis();
+
+  uint8_t src  = a5Frame[1];
+  uint8_t dst  = a5Frame[2];
+  uint8_t type = a5Frame[3];
+  uint16_t seq = (uint16_t)a5Frame[4] | ((uint16_t)a5Frame[5] << 8);
+
+  noteValidCommunication();
+
+  if (type == 0x10) {
+    timeFramesSeen++;
+    uint16_t year = (uint16_t)a5Frame[6] | ((uint16_t)a5Frame[7] << 8);
+    uint8_t month  = a5Frame[8];
+    uint8_t day    = a5Frame[9];
+    uint8_t hour   = a5Frame[10];
+    uint8_t minute = a5Frame[11];
+    uint8_t second = a5Frame[12];
+
+    Serial.printf("[RS485 A5 TIME] src=%u dst=%u seq=%u %04u-%02u-%02u %02u:%02u:%02u\n",
+                  src, dst, seq, year, month, day, hour, minute, second);
+  }
+  else if (type == 0x11) {
+    ackFramesSeen++;
+    Serial.printf("[RS485 A5 ACK] src=%u dst=%u seq=%u\n",
+                  src, dst, seq);
+  }
+  else {
+    Serial.printf("[RS485 A5] src=%u dst=%u type=0x%02X seq=%u payload:",
+                  src, dst, type, seq);
+    for (int i = 6; i <= 12; i++) Serial.printf(" %02X", a5Frame[i]);
+    Serial.println();
+  }
+}
+
+void processLegacyPacket() {
+  if (legacyLen != 4) return;
+
+  legacyFramesSeen++;
+  memcpy(lastFrame, legacyBuf, 4);
+  lastFrameLen = 4;
+  lastFrameMs = millis();
+
+  noteValidCommunication();
+
+  Serial.printf("[RS485 LEGACY CMD] bed=%u cmd=%u target=%u value=%u\n",
+                legacyBuf[0], legacyBuf[1], legacyBuf[2], legacyBuf[3]);
+
+  // Blue is reserved for an actual massage order addressed to this BedBox.
+  if ((legacyBuf[0] == MY_BED_ID || legacyBuf[0] == 0) && legacyBuf[1] <= CMD_TIMER) {
+    showCommandTx();
+  }
+
+  handleMessage(legacyBuf[0], legacyBuf[1], legacyBuf[2], legacyBuf[3]);
+}
+
 void pollUart() {
   while (Serial2.available()) {
     unsigned long now = millis();
-    if (frameLen > 0 && now - lastByteMs > FRAME_GAP_MS) frameLen = 0;
+    uint8_t b = (uint8_t)Serial2.read();
+
+    rxBytesSeen++;
+
+    // Quiet gap closes a pending legacy packet.
+    if (!collectingA5 && legacyLen > 0 && now - lastByteMs > FRAME_GAP_MS) {
+      if (legacyLen == 4) processLegacyPacket();
+      else {
+        Serial.printf("[RS485 RAW] ignored legacy-sized fragment len=%d\n", legacyLen);
+      }
+      legacyLen = 0;
+    }
+
     lastByteMs = now;
 
-    frame[frameLen++] = (uint8_t)Serial2.read();
+    if (collectingA5) {
+      a5Frame[a5Len++] = b;
 
-    if (frameLen == 4) {
-      frameLen = 0;
-      framesSeen++;
-      memcpy(lastFrame, frame, 4);
-      lastFrameMs = now;
-      Serial.printf("[LINK] bed=%u cmd=%u target=%u value=%u\n",
-                    frame[0], frame[1], frame[2], frame[3]);
-      handleMessage(frame[0], frame[1], frame[2], frame[3]);
+      if (a5Len == A5_FRAME_LEN) {
+        processA5Frame();
+        collectingA5 = false;
+        a5Len = 0;
+      }
+      continue;
     }
+
+    if (b == 0xA5) {
+      // A5 is a hard start marker for the observed 14-byte protocol.
+      // Drop any incomplete non-A5 fragment rather than mixing protocols.
+      if (legacyLen > 0) {
+        Serial.printf("[RS485 RAW] dropped %d byte fragment before A5\n", legacyLen);
+        legacyLen = 0;
+      }
+
+      collectingA5 = true;
+      a5Len = 0;
+      a5Frame[a5Len++] = b;
+      continue;
+    }
+
+    // Non-A5 traffic can still be the legacy 4-byte BedBox protocol.
+    if (legacyLen < 4) {
+      legacyBuf[legacyLen++] = b;
+    } else {
+      // More than 4 non-A5 bytes without a quiet gap: not a valid legacy packet.
+      Serial.println("[RS485 RAW] non-A5 stream longer than 4 bytes - discarded");
+      legacyLen = 0;
+    }
+  }
+
+  // Close a legacy packet only after a quiet gap.
+  if (!collectingA5 && legacyLen > 0 && millis() - lastByteMs > FRAME_GAP_MS) {
+    if (legacyLen == 4) processLegacyPacket();
+    else Serial.printf("[RS485 RAW] ignored fragment len=%d\n", legacyLen);
+    legacyLen = 0;
+  }
+
+  // A5 frame timed out before 14 bytes: clear it safely, no motor action.
+  if (collectingA5 && a5Len > 0 && millis() - lastByteMs > FRAME_GAP_MS) {
+    Serial.printf("[RS485 A5] incomplete frame len=%d - discarded\n", a5Len);
+    collectingA5 = false;
+    a5Len = 0;
   }
 }
 
 // ============================================================
-//  Uplink - tell the panel what the zones are doing
+// Uplink
 // ============================================================
 void reportLevels() {
   unsigned long now = millis();
@@ -302,19 +604,33 @@ void reportLevels() {
 
   for (int z = 0; z < NUM_ZONES; z++) {
     int lvl = 0;
+
     for (int m = 0; m < MOTORS_PRESENT; m++)
-      if (MOTOR_ZONE[m] == z && motorLevel[m] > lvl) lvl = motorLevel[m];
+      if (MOTOR_ZONE[m] == z && motorLevel[m] > lvl)
+        lvl = motorLevel[m];
 
     if (abs(lvl - lastSentZone[z]) < REPORT_STEP) continue;
     lastSentZone[z] = lvl;
 
-    uint8_t out[4] = { MY_BED_ID, RPT_LEVEL, (uint8_t)z, (uint8_t)lvl };
+    uint8_t out[4] = {
+      MY_BED_ID,
+      RPT_LEVEL,
+      (uint8_t)z,
+      (uint8_t)lvl
+    };
+
     Serial2.write(out, 4);
+    Serial2.flush();
+    txFrames++;
+    showFeedbackTx();
+
+    Serial.printf("[RS485 TX] bed=%u rpt=%u zone=%u level=%u\n",
+                  out[0], out[1], out[2], out[3]);
   }
 }
 
 // ============================================================
-//  Persistence
+// Persistence
 // ============================================================
 void saveState() {
   prefs.begin("bedbox", false);
@@ -330,7 +646,8 @@ void loadState() {
   int savedPreset = -1;
 
   prefs.begin("bedbox", true);
-  if (prefs.isKey("levels")) prefs.getBytes("levels", saved, sizeof(saved));
+  if (prefs.isKey("levels"))
+    prefs.getBytes("levels", saved, sizeof(saved));
   savedPreset = prefs.getInt("preset", -1);
   presetLevel = prefs.getInt("plevel", 60);
   prefs.end();
@@ -344,14 +661,18 @@ void loadState() {
 
   bool any = false;
   for (int m = 0; m < MOTORS_PRESENT; m++) {
-    if (saved[m] > 0) { setMotor(m, saved[m]); any = true; }
+    if (saved[m] > 0) {
+      setMotor(m, saved[m]);
+      any = true;
+    }
   }
+
   if (any) Serial.println("Resuming the levels that were running at power-off.");
   else     Serial.println("Nothing to resume - starting idle.");
 }
 
 // ============================================================
-//  Pattern engine
+// Pattern engine
 // ============================================================
 void startPattern(int p, int level) {
   if (p < 0 || p >= PAT_COUNT) return;
@@ -363,14 +684,12 @@ void startPattern(int p, int level) {
   Serial.printf("Pattern %s at %d%%\n", PATTERN_NAME[p], presetLevel);
 }
 
-// Advance whichever pattern is running. Only sets targets - never writes PWM.
 static void advancePattern() {
   const int L    = presetLevel;
   const int BASE = max(FLOOR_LEVEL, L / 5);
   const unsigned long now = millis();
 
   switch (activePreset) {
-
     case PAT_WATERFALL:
       if (now < stepAtMs) return;
       stepAtMs = now + 1600;
@@ -390,7 +709,8 @@ static void advancePattern() {
       if (now < stepAtMs) return;
       stepAtMs = now + 1400;
       const int seq[6] = {0, 1, 2, 3, 2, 1};
-      for (int z = 0; z < NUM_ZONES; z++) tgtZone(z, z == seq[phase] ? L : BASE);
+      for (int z = 0; z < NUM_ZONES; z++)
+        tgtZone(z, z == seq[phase] ? L : BASE);
       phase = (phase + 1) % 6;
       break;
     }
@@ -398,22 +718,30 @@ static void advancePattern() {
     case PAT_DIAGONAL:
       if (now < stepAtMs) return;
       stepAtMs = now + 2500;
-      tgtZone(1, BASE); tgtZone(2, BASE);
-      if (phase == 0) { tgtMotor(HEAD_L, L); tgtMotor(HEAD_R, FLOOR_LEVEL);
-                        tgtMotor(LEG_R,  L); tgtMotor(LEG_L,  FLOOR_LEVEL); }
-      else            { tgtMotor(HEAD_R, L); tgtMotor(HEAD_L, FLOOR_LEVEL);
-                        tgtMotor(LEG_L,  L); tgtMotor(LEG_R,  FLOOR_LEVEL); }
+      tgtZone(1, BASE);
+      tgtZone(2, BASE);
+      if (phase == 0) {
+        tgtMotor(HEAD_L, L); tgtMotor(HEAD_R, FLOOR_LEVEL);
+        tgtMotor(LEG_R, L);  tgtMotor(LEG_L, FLOOR_LEVEL);
+      } else {
+        tgtMotor(HEAD_R, L); tgtMotor(HEAD_L, FLOOR_LEVEL);
+        tgtMotor(LEG_L, L);  tgtMotor(LEG_R, FLOOR_LEVEL);
+      }
       phase ^= 1;
       break;
 
     case PAT_SIDE:
       if (now < stepAtMs) return;
       stepAtMs = now + 2500;
-      tgtZone(1, BASE); tgtZone(2, BASE);
-      if (phase == 0) { tgtMotor(HEAD_L, L); tgtMotor(LEG_L,  L);
-                        tgtMotor(HEAD_R, FLOOR_LEVEL); tgtMotor(LEG_R, FLOOR_LEVEL); }
-      else            { tgtMotor(HEAD_R, L); tgtMotor(LEG_R,  L);
-                        tgtMotor(HEAD_L, FLOOR_LEVEL); tgtMotor(LEG_L, FLOOR_LEVEL); }
+      tgtZone(1, BASE);
+      tgtZone(2, BASE);
+      if (phase == 0) {
+        tgtMotor(HEAD_L, L); tgtMotor(LEG_L, L);
+        tgtMotor(HEAD_R, FLOOR_LEVEL); tgtMotor(LEG_R, FLOOR_LEVEL);
+      } else {
+        tgtMotor(HEAD_R, L); tgtMotor(LEG_R, L);
+        tgtMotor(HEAD_L, FLOOR_LEVEL); tgtMotor(LEG_L, FLOOR_LEVEL);
+      }
       phase ^= 1;
       break;
 
@@ -421,8 +749,10 @@ static void advancePattern() {
       if (now < stepAtMs) return;
       stepAtMs = now + 1200;
       const int ring[4] = {HEAD_L, HEAD_R, LEG_R, LEG_L};
-      tgtZone(1, L / 4); tgtZone(2, L / 4);
-      for (int i = 0; i < 4; i++) tgtMotor(ring[i], i == phase ? L : FLOOR_LEVEL);
+      tgtZone(1, L / 4);
+      tgtZone(2, L / 4);
+      for (int i = 0; i < 4; i++)
+        tgtMotor(ring[i], i == phase ? L : FLOOR_LEVEL);
       phase = (phase + 1) % 4;
       break;
     }
@@ -430,7 +760,8 @@ static void advancePattern() {
     case PAT_KNEAD:
       if (now < stepAtMs) return;
       stepAtMs = now + 1400;
-      tgtZone(0, L / 6); tgtZone(3, L / 6);
+      tgtZone(0, L / 6);
+      tgtZone(3, L / 6);
       tgtMotor(BACK_U, phase == 0 ? L : FLOOR_LEVEL);
       tgtMotor(BACK_L, phase == 0 ? FLOOR_LEVEL : L);
       phase ^= 1;
@@ -440,7 +771,8 @@ static void advancePattern() {
       if (now < stepAtMs) return;
       const unsigned long dur[4] = {260, 260, 260, 1800};
       stepAtMs = now + dur[phase];
-      tgtZone(0, FLOOR_LEVEL); tgtZone(3, FLOOR_LEVEL);
+      tgtZone(0, FLOOR_LEVEL);
+      tgtZone(3, FLOOR_LEVEL);
       bool on = (phase == 0 || phase == 2);
       tgtMotor(BACK_U, on ? L : FLOOR_LEVEL);
       tgtMotor(BACK_L, on ? L : FLOOR_LEVEL);
@@ -449,29 +781,33 @@ static void advancePattern() {
     }
 
     case PAT_BREATHE: {
-      // 4 s in, 0.8 s hold, 6 s out, 1.2 s rest
-      const unsigned long T_IN = 4000, T_HOLD = 800, T_OUT = 6000, T_REST = 1200;
+      const unsigned long T_IN = 4000;
+      const unsigned long T_HOLD = 800;
+      const unsigned long T_OUT = 6000;
+      const unsigned long T_REST = 1200;
       const unsigned long cycle = T_IN + T_HOLD + T_OUT + T_REST;
       unsigned long t = (now - patStartMs) % cycle;
       int lvl;
-      if      (t < T_IN)                 lvl = (int)((long)L * t / T_IN);
-      else if (t < T_IN + T_HOLD)        lvl = L;
+
+      if      (t < T_IN) lvl = (int)((long)L * t / T_IN);
+      else if (t < T_IN + T_HOLD) lvl = L;
       else if (t < T_IN + T_HOLD + T_OUT)
-              lvl = (int)((long)L * (T_IN + T_HOLD + T_OUT - t) / T_OUT);
-      else                               lvl = 0;
+        lvl = (int)((long)L * (T_IN + T_HOLD + T_OUT - t) / T_OUT);
+      else lvl = 0;
+
       tgtAll(max(lvl, FLOOR_LEVEL));
       break;
     }
 
     case PAT_RAIN:
       if (now < stepAtMs) return;
-      if (phase == 0) {                       // a drop
+      if (phase == 0) {
         int m = random(0, MOTORS_PRESENT);
         tgtAll(FLOOR_LEVEL);
         tgtMotor(m, max(30, L * 2 / 3));
         stepAtMs = now + random(300, 700);
         phase = 1;
-      } else {                                // the gap
+      } else {
         tgtAll(FLOOR_LEVEL);
         stepAtMs = now + random(400, 1600);
         phase = 0;
@@ -481,19 +817,18 @@ static void advancePattern() {
     case PAT_SHUFFLE: {
       if (now < stepAtMs) return;
       stepAtMs = now + random(1500, 4000);
-      int z   = random(0, NUM_ZONES);
+      int z = random(0, NUM_ZONES);
       int lvl = random(max(30, L / 2), L + 1);
-      for (int i = 0; i < NUM_ZONES; i++) tgtZone(i, i == z ? lvl : FLOOR_LEVEL);
+      for (int i = 0; i < NUM_ZONES; i++)
+        tgtZone(i, i == z ? lvl : FLOOR_LEVEL);
       break;
     }
 
-    default: break;
+    default:
+      break;
   }
 }
 
-// Ramp every motor toward its target and write the PWM. No kick-start here:
-// the ramp crosses the break-loose threshold on its own, which is what makes
-// the patterns feel like movement instead of switching.
 void tickEngine() {
   unsigned long now = millis();
   if (now < nextTickMs) return;
@@ -503,80 +838,113 @@ void tickEngine() {
 
   for (int m = 0; m < MOTORS_PRESENT; m++) {
     if (motorLevel[m] == tgtLevel[m]) continue;
+
     int diff = tgtLevel[m] - motorLevel[m];
     int step = (abs(diff) < RAMP_STEP) ? abs(diff) : RAMP_STEP;
     motorLevel[m] += (diff > 0) ? step : -step;
+
     pwmWrite(m, levelToDuty(m, motorLevel[m]));
   }
 }
 
 // ============================================================
-//  Console
+// Console
 // ============================================================
 String inBuf;
 
 void runCalib(int m) {
-  if (m < 0 || m >= MOTORS_PRESENT) { Serial.println("bad motor #"); return; }
+  if (m < 0 || m >= MOTORS_PRESENT) {
+    Serial.println("bad motor #");
+    return;
+  }
+
   Serial.printf("Calibrating motor %d (%s, %s). Ramping duty slowly.\n",
                 m, ZONE_NAME[MOTOR_ZONE[m]], MOTOR_BIG[m] ? "BIG" : "small");
   Serial.println("Watch the motor. Press ENTER the moment it starts.");
+
   while (Serial.available()) Serial.read();
+
   for (int duty = 30; duty <= 255; duty += 5) {
     pwmWrite(m, duty);
     Serial.printf("  duty = %d  (%.0f%%)\n", duty, duty * 100.0 / 255);
+
     unsigned long t0 = millis();
+
     while (millis() - t0 < 700) {
+      updateDiagnostics();
+
       if (Serial.available()) {
         while (Serial.available()) Serial.read();
         pwmWrite(m, 0);
         Serial.printf("\nStart threshold: duty %d\n", duty);
         Serial.printf("Set %s to about %d (threshold plus margin).\n",
-                      MOTOR_BIG[m] ? "MIN_DUTY_BIG" : "MIN_DUTY_SMALL", duty + 8);
+                      MOTOR_BIG[m] ? "MIN_DUTY_BIG" : "MIN_DUTY_SMALL",
+                      duty + 8);
         return;
       }
+
       delay(10);
     }
   }
+
   pwmWrite(m, 0);
   Serial.println("Ramp finished without a keypress - motor never started?");
 }
 
 void printStatus() {
   Serial.println("---- STATUS ----");
+
   for (int m = 0; m < MOTORS_PRESENT; m++)
     Serial.printf(" m%d pin%-3d %-10s %-5s level %3d%% target %3d%% duty %3d\n",
                   m, MOTOR_PIN[m], ZONE_NAME[MOTOR_ZONE[m]],
                   MOTOR_BIG[m] ? "BIG" : "small",
                   motorLevel[m], tgtLevel[m], levelToDuty(m, motorLevel[m]));
+
   Serial.printf(" thresholds: small=%d big=%d\n", MIN_DUTY_SMALL, MIN_DUTY_BIG);
   Serial.printf(" pattern: %s\n",
                 activePreset >= 0 ? PATTERN_NAME[activePreset] : "none");
+
   if (timerEndMs)
     Serial.printf(" timer: %lu s left\n", (timerEndMs - millis()) / 1000UL);
+
   Serial.printf(" demo: %s\n", demoActive ? "RUNNING" : "stopped");
   Serial.println("----------------");
 }
 
 void printLink() {
-  Serial.println("---- LINK ----");
-  Serial.printf(" bed id      : %u\n", MY_BED_ID);
-  Serial.printf(" uart        : RX=%d TX=%d @115200\n", UART_RX, UART_TX);
-  Serial.printf(" frames seen : %ld\n", framesSeen);
-  if (framesSeen)
-    Serial.printf(" last frame  : %u %u %u %u  (%lu ms ago)\n",
-                  lastFrame[0], lastFrame[1], lastFrame[2], lastFrame[3],
-                  millis() - lastFrameMs);
-  else
-    Serial.println(" last frame  : none yet - check TX/RX crossed and GND shared");
-  Serial.println("--------------");
+  Serial.println("---- RS485 LINK ----");
+  Serial.printf(" bed id          : %u\n", MY_BED_ID);
+  Serial.printf(" uart            : RX=%d TX=%d @115200\n", UART_RX, UART_TX);
+  Serial.printf(" NeoPixel DATA   : GPIO%d, %d LEDs\n", NEO_PIN, NEO_COUNT);
+  Serial.printf(" RX bytes        : %ld\n", rxBytesSeen);
+  Serial.printf(" A5 valid frames : %ld\n", a5FramesSeen);
+  Serial.printf("   TIME 0x10     : %ld\n", timeFramesSeen);
+  Serial.printf("   ACK  0x11     : %ld\n", ackFramesSeen);
+  Serial.printf(" legacy 4-byte   : %ld\n", legacyFramesSeen);
+  Serial.printf(" checksum faults : %ld\n", checksumFaults);
+  Serial.printf(" TX frames       : %ld\n", txFrames);
+
+  if (lastFrameLen > 0) {
+    Serial.printf(" last RX         : len=%d (%lu ms ago) :", lastFrameLen, millis() - lastFrameMs);
+    for (int i = 0; i < lastFrameLen; i++) Serial.printf(" %02X", lastFrame[i]);
+    Serial.println();
+  } else {
+    Serial.println(" last RX         : none yet");
+  }
+
+  Serial.println("--------------------");
 }
 
 void handleLine(String line) {
-  line.trim(); line.toLowerCase();
+  line.trim();
+  line.toLowerCase();
+
   if (line.length() == 0) return;
+
   int sp1 = line.indexOf(' ');
   String cmd  = sp1 < 0 ? line : line.substring(0, sp1);
   String rest = sp1 < 0 ? "" : line.substring(sp1 + 1);
+
   int a = rest.toInt();
   int sp2 = rest.indexOf(' ');
   int b = sp2 < 0 ? -1 : rest.substring(sp2 + 1).toInt();
@@ -590,120 +958,194 @@ void handleLine(String line) {
   else if (cmd == "calib")  { runCalib(a); }
   else if (cmd == "status") { printStatus(); }
   else if (cmd == "link")   { printLink(); }
-  else if (cmd == "demo")   { demoActive = true; Serial.println("Demo starting - press ENTER to stop."); }
+  else if (cmd == "ledtest") {
+    Serial.println("NeoPixel startup test.");
+    startupLedTest();
+  }
+  else if (cmd == "demo") {
+    demoActive = true;
+    Serial.println("Demo starting - press ENTER to stop.");
+  }
   else if (cmd == "list") {
-    for (int p = 0; p < PAT_COUNT; p++) Serial.printf("  %2d  %s\n", p, PATTERN_NAME[p]);
+    for (int p = 0; p < PAT_COUNT; p++)
+      Serial.printf("  %2d  %s\n", p, PATTERN_NAME[p]);
   }
   else {
-    Serial.printf("Unknown command: \"%s\" (%d chars)\n", line.c_str(), line.length());
+    Serial.printf("Unknown command: \"%s\" (%d chars)\n",
+                  line.c_str(), line.length());
     Serial.println("motor M N | zone Z N | all N | preset P [N] | timer MIN | off");
-    Serial.println("demo | calib M | status | link | list");
+    Serial.println("demo | calib M | status | link | ledtest | list");
   }
 }
 
 // ============================================================
-//  Demo - unchanged in spirit, but no longer automatic
+// Demo
 // ============================================================
 void demoSet(int m, int level) {
   if (m < 0 || m >= MOTORS_PRESENT) return;
   motorLevel[m] = constrain(level, 0, 100);
-  tgtLevel[m]   = motorLevel[m];
+  tgtLevel[m] = motorLevel[m];
   pwmWrite(m, levelToDuty(m, motorLevel[m]));
 }
 
 void stopDemoToManual() {
   demoActive = false;
-  for (int m = 0; m < MOTORS_PRESENT; m++) { motorLevel[m] = 0; tgtLevel[m] = 0; pwmWrite(m, 0); }
+
+  for (int m = 0; m < MOTORS_PRESENT; m++) {
+    motorLevel[m] = 0;
+    tgtLevel[m] = 0;
+    pwmWrite(m, 0);
+  }
+
   Serial.println();
   Serial.println("Demo stopped.");
 }
 
 bool demoWait(unsigned long ms) {
   unsigned long t0 = millis();
+
   while (millis() - t0 < ms) {
     pollUart();
+    updateDiagnostics();
+
     if (Serial.available()) {
       while (Serial.available()) Serial.read();
       stopDemoToManual();
       return true;
     }
+
     delay(5);
   }
+
   return false;
 }
 
 bool demoRamp(int m, int fromL, int toL, unsigned long ms) {
   const int steps = 40;
+
   for (int i = 0; i <= steps; i++) {
     if (!demoActive) return true;
+
     demoSet(m, fromL + (toL - fromL) * i / steps);
+
     if (demoWait(ms / steps)) return true;
   }
+
   return false;
 }
 
 void runDemoPass() {
   Serial.println();
-  Serial.printf("=== BED BOX - TEST %03d - bed #%d - %d motors ===\n",
+  Serial.printf("=== BED BOX SHEMI - TEST %03d - bed #%d - %d motors ===\n",
                 TEST_NUMBER, MY_BED_ID, MOTORS_PRESENT);
-  Serial.printf("LEDC mode: %s\n", LEDC_BY_PIN ? "core 3.x, by pin" : "core 2.x, by channel");
+  Serial.printf("LEDC mode: %s\n",
+                LEDC_BY_PIN ? "core 3.x, by pin" : "core 2.x, by channel");
   Serial.println("Self-test running. Press any key to stop and get the console.");
 
   for (int m = 0; m < MOTORS_PRESENT; m++) {
-    Serial.printf("[DEMO] motor %d  %s %s  ramp up and down\n",
-                  m, ZONE_NAME[MOTOR_ZONE[m]], MOTOR_BIG[m] ? "BIG" : "small");
+    Serial.printf("[DEMO] motor %d %s %s ramp up and down\n",
+                  m, ZONE_NAME[MOTOR_ZONE[m]],
+                  MOTOR_BIG[m] ? "BIG" : "small");
+
     if (demoRamp(m, 0, 100, 2500)) return;
     if (demoWait(600)) return;
     if (demoRamp(m, 100, 0, 1800)) return;
+
     demoSet(m, 0);
+
     if (demoWait(400)) return;
   }
+
   Serial.println("[DEMO] all together");
+
   for (int i = 0; i <= 40; i++) {
     if (!demoActive) return;
-    for (int m = 0; m < MOTORS_PRESENT; m++) demoSet(m, 100 * i / 40);
+    for (int m = 0; m < MOTORS_PRESENT; m++)
+      demoSet(m, 100 * i / 40);
     if (demoWait(70)) return;
   }
+
   if (demoWait(900)) return;
+
   for (int i = 40; i >= 0; i--) {
     if (!demoActive) return;
-    for (int m = 0; m < MOTORS_PRESENT; m++) demoSet(m, 100 * i / 40);
+    for (int m = 0; m < MOTORS_PRESENT; m++)
+      demoSet(m, 100 * i / 40);
     if (demoWait(55)) return;
   }
-  for (int m = 0; m < MOTORS_PRESENT; m++) demoSet(m, 0);
+
+  for (int m = 0; m < MOTORS_PRESENT; m++)
+    demoSet(m, 0);
+
   Serial.println("[DEMO] pass complete, looping");
+
   if (demoWait(1200)) return;
 }
 
+void printAliveHeartbeat() {
+  unsigned long now = millis();
+  if ((long)(now - nextAlivePrint) < 0) return;
+  nextAlivePrint = now + 1000;
+
+  Serial.printf("[ALIVE] BEDBOX SHEMI TEST%03d ms=%lu RXbytes=%ld A5=%ld TIME=%ld ACK=%ld LEGACY=%ld CRCbad=%ld TX=%ld\n",
+                TEST_NUMBER, now, rxBytesSeen, a5FramesSeen, timeFramesSeen,
+                ackFramesSeen, legacyFramesSeen, checksumFaults, txFrames);
+}
+
+// ============================================================
+// Setup / loop
 // ============================================================
 void setup() {
   Serial.begin(115200);
   Serial2.begin(115200, SERIAL_8N1, UART_RX, UART_TX);
   delay(300);
 
-  for (int z = 0; z < NUM_ZONES; z++) lastSentZone[z] = -99;
+  pixels.begin();
+  pixels.setBrightness(NEO_BRIGHTNESS);
+
+  C_RED    = pixels.Color(255, 0, 0, 0);
+  C_GREEN  = pixels.Color(0, 180, 0, 0);
+  C_YELLOW = pixels.Color(255, 170, 0, 0);
+  C_BLUE   = pixels.Color(0, 80, 255, 0);
+  C_WHITE  = pixels.Color(180, 180, 180, 0);
+  C_OFF    = pixels.Color(0, 0, 0, 0);
+
+  startupLedTest();
+  ledStepAt = millis();
+  nextAlivePrint = millis();
+
+  for (int z = 0; z < NUM_ZONES; z++)
+    lastSentZone[z] = -99;
+
   for (int m = 0; m < NUM_MOTORS; m++) {
     motorLevel[m] = 0;
-    tgtLevel[m]   = 0;
+    tgtLevel[m] = 0;
+
 #if LEDC_BY_PIN
     ledcAttach(MOTOR_PIN[m], PWM_FREQ, PWM_RES);
 #else
     ledcSetup(m, PWM_FREQ, PWM_RES);
     ledcAttachPin(MOTOR_PIN[m], m);
 #endif
+
     pwmWrite(m, 0);
   }
+
   randomSeed(esp_random());
 
   Serial.println();
-  Serial.printf("=== BED BOX - TEST %03d - bed #%d - %d motors ===\n",
+  Serial.printf("=== BED BOX SHEMI - TEST %03d - bed #%d - %d motors ===\n",
                 TEST_NUMBER, MY_BED_ID, MOTORS_PRESENT);
-  Serial.printf("UART link on RX=%d TX=%d @115200. Listening for 4-byte frames.\n",
-                UART_RX, UART_TX);
+  Serial.printf("RS485 UART: RX=%d TX=%d @115200\n", UART_RX, UART_TX);
+  Serial.printf("NeoPixels: %d LEDs on GPIO%d\n", NEO_COUNT, NEO_PIN);
+  Serial.println("LED code: GREEN 1-pixel=bus alive, RED 1-pixel=bus silent.");
+  Serial.println("          BLUE 3-train -> command Panel->BedBox, YELLOW 3-train <- feedback.");
+  Serial.println("          RED all-flash=bad checksum.");
   Serial.printf("Calibration: MIN_DUTY_SMALL=%d MIN_DUTY_BIG=%d\n",
                 MIN_DUTY_SMALL, MIN_DUTY_BIG);
-  Serial.printf("LEDC mode: %s\n", LEDC_BY_PIN ? "core 3.x, by pin" : "core 2.x, by channel");
-  Serial.println("Type  list  for the patterns, or  link  to check the panel wire.");
+  Serial.printf("LEDC mode: %s\n",
+                LEDC_BY_PIN ? "core 3.x, by pin" : "core 2.x, by channel");
+  Serial.println("Type list for patterns, link for RS485 diagnostics, ledtest for LEDs.");
 
   loadState();
 
@@ -714,6 +1156,9 @@ void setup() {
 }
 
 void loop() {
+  updateDiagnostics();
+  printAliveHeartbeat();
+
   if (demoActive) {
     runDemoPass();
     return;
@@ -723,8 +1168,12 @@ void loop() {
 
   while (Serial.available()) {
     char c = Serial.read();
-    if (c == '\n' || c == '\r') {          // CR, LF or CRLF all end a line
-      if (inBuf.length()) { handleLine(inBuf); inBuf = ""; }
+
+    if (c == '\n' || c == '\r') {
+      if (inBuf.length()) {
+        handleLine(inBuf);
+        inBuf = "";
+      }
     } else {
       inBuf += c;
     }
@@ -733,7 +1182,12 @@ void loop() {
   if (timerEndMs && millis() > timerEndMs) {
     timerEndMs = 0;
     activePreset = -1;
-    for (int m = 0; m < MOTORS_PRESENT; m++) { tgtLevel[m] = 0; setMotor(m, 0); }
+
+    for (int m = 0; m < MOTORS_PRESENT; m++) {
+      tgtLevel[m] = 0;
+      setMotor(m, 0);
+    }
+
     Serial.println("Session timer finished - motors stopped, settings kept.");
   }
 
@@ -741,6 +1195,7 @@ void loop() {
   reportLevels();
 }
 
-// BED BOX - TEST 012 - end of file
-// 6 motors, 3 drivers, two-way UART on 16/17, 11 patterns
-// TEST 012 - reports zone levels up to the panel
+// ============================================================
+// BED BOX SHEMI - TEST 024 - end of file
+// RS485 RX=16 TX=17, NeoPixel DATA=23 via external level shifter, 7 LEDs
+// ============================================================

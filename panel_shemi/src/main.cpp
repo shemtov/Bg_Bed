@@ -1,8 +1,78 @@
 // ============================================================
-// PANEL SHEMI - TEST 066 - MATCHED PAIR + SEIKO NIGHT SCREENSAVER
+// PANEL SHEMI - TEST 074 - MATCHED PAIR + SEIKO NIGHT SCREENSAVER
 // ============================================================
 //
 // Board: Waveshare ESP32-S3-Touch-LCD-7B, 1024 x 600
+// TEST074 - BUILD FIX FOR AM / PM BUTTONS
+//   TEST073 did not compile because seedFromRTC() calls
+//   refreshAmPmButtons() before the compiler has seen its declaration.
+//   Adds the forward declaration before seedFromRTC().
+//   No UI behavior, RTC, RS485, massage or audio logic changed.
+//   NOT YET RUN ON HARDWARE.
+// TEST073 - CLOCK SETTING: DIRECT AM / PM BUTTONS
+//   Removes the 12-hour ON/OFF switch from the Clock settings tab.
+//   Replaces it with two small round buttons: AM and PM.
+//   The selected half-day lights green; the other stays dark.
+//   Pressing AM/PM changes only the half-day, not the displayed hour.
+//   Hour +/- now cycles 1..12 inside the selected AM/PM half.
+//   The DS3231 still stores and receives 24-hour time internally.
+//   Clock display is now always 12-hour AM/PM.
+//   Massage, feedback, RTC validity and RS485 logic are unchanged.
+//   NOT YET RUN ON HARDWARE.
+// TEST072 - BUILD FIX FOR MASSAGE SLIDER VALUE FONT
+//   TEST071 did not compile because lv_font_montserrat_20 is not enabled
+//   in this Waveshare LVGL build.
+//   The live percentage labels above the four massage sliders now use
+//   the already-enabled lv_font_montserrat_26.
+//   No massage mapping, slider geometry, feedback, RTC or RS485 logic changed.
+//   NOT YET RUN ON HARDWARE.
+// TEST071 - MASSAGE FULL + SLIDER READOUT
+//   Fixes the FULL tile mapping. FULL is UI tile index 3, not 11.
+//   Tile 3 now sends CMD_ALL=100 to the BedBox.
+//   UI tiles after FULL map down by one to BedBox presets 3..10.
+//   FULL label changed from "מלא" to "הכל".
+//   Four zone sliders are slimmer, while the knob stays visually large.
+//   Each slider now shows its exact live percentage above it.
+//   The displayed number follows both finger movement and BedBox feedback.
+//   RTC TEST070 diagnostic remains unchanged.
+//   NOT YET RUN ON HARDWARE.
+// TEST070 - RTC DIAGNOSTIC MADE VISIBLE
+//   TEST069 printed the RTC dump too early in boot, before the Serial
+//   Monitor was reliably attached, so the useful line could be missed.
+//   While CLOCK NOT READY persists, TEST070 prints the full RTC dump
+//   every 5 seconds. No RTC state is changed and no Set Time is done.
+//   Massage, feedback and RS485 behaviour are unchanged.
+//   NOT YET RUN ON HARDWARE.
+// TEST069 - RTC BACKUP / OSF DIAGNOSTIC
+//   Diagnostic-only change.
+//   Prints raw DS3231 time/date and status register 0x0F at boot.
+//   This tells us whether the clock value survived power-off and
+//   whether OSF (Oscillator Stop Flag, bit 7) is set.
+//   Massage, feedback and RS485 behaviour are unchanged.
+//   NOT YET RUN ON HARDWARE.
+// TEST068 - MASSAGE CLOSED LOOP RESTORED
+//   TEST067 restored BedBox -> panel feedback, but the current 7-inch
+//   massage handlers only changed the UI and printed to USB Serial.
+//   They did NOT send motor commands to the BedBox.
+//   TEST068 restores the proven 4-byte BedBox downlink:
+//       {bedId, cmd, target, value}
+//   on the SAME onboard RS485 Serial1 bus.
+//   Commands:
+//       0 OFF, 1 ALL, 2 ZONE, 4 PRESET, 5 TIMER
+//   The 12th "Full" tile sends ALL=100; patterns 0..10 send PRESET.
+//   TEST067 feedback remains in place:
+//       {bedId, 20, zone, level}
+//   NOT YET RUN ON HARDWARE.
+// TEST067 - BEDBOX FEEDBACK RESTORED
+//   Restores the hardware-proven TEST077/BedBox TEST012 feedback behaviour
+//   to the current 7-inch panel.
+//   BedBox reports remain the proven 4-byte form:
+//       {bedId, 20, zone, level}
+//   The panel now accepts those reports on the SAME RS485 stream while
+//   preserving the existing 14-byte A5 TIME/ACK traffic.
+//   Slider updates are display-only: lv_slider_set_value() does not
+//   generate another motor command.
+//   NOT YET RUN ON HARDWARE - build/flash required for confirmation.
 //
 // WHAT CHANGED IN TEST 083:
 //   Fixes TEST082 build failure: the generated setup Serial.println()
@@ -1546,15 +1616,45 @@ static void rsSendFrame(const TimeFrame &f) {
   RS485.flush();
 }
 
+static void handleBedboxLevelFeedback(uint8_t bedId, uint8_t cmd,
+                                      uint8_t zone, uint8_t level);
 static bool rsReadFrame(TimeFrame &out) {
   static uint8_t buf[sizeof(TimeFrame)];
   static size_t pos = 0;
+
+  // TEST067: legacy BedBox feedback lives beside the A5 TIME/ACK stream.
+  // Only valid {bedId,20,zone,level} frames are acted on.
+  static uint8_t rpt[4] = {0, 0, 0, 0};
+  static size_t rptPos = 0;
 
   while (RS485.available()) {
     const uint8_t b = uint8_t(RS485.read());
 
     if (pos == 0) {
-      if (b != FRAME_START) continue;
+      if (b != FRAME_START) {
+        // TEST067: collect non-A5 bytes as possible 4-byte BedBox feedback.
+        rpt[rptPos++] = b;
+
+        if (rptPos == 4) {
+          if ((rpt[0] == 1 || rpt[0] == 0) &&
+              rpt[1] == 20 &&
+              rpt[2] < 4 &&
+              rpt[3] <= 100) {
+            handleBedboxLevelFeedback(rpt[0], rpt[1], rpt[2], rpt[3]);
+            rptPos = 0;
+          } else {
+            // Sliding-window resync: keep the last 3 bytes.
+            rpt[0] = rpt[1];
+            rpt[1] = rpt[2];
+            rpt[2] = rpt[3];
+            rptPos = 3;
+          }
+        }
+        continue;
+      }
+
+      // An A5 frame starts here. A partial legacy candidate cannot span it.
+      rptPos = 0;
       buf[pos++] = b;
       continue;
     }
@@ -1578,7 +1678,7 @@ static bool rsTimeFieldsValid(const TimeFrame &f) {
          f.hour <= 23 && f.minute <= 59 && f.second <= 59;
 }
 
-#define TEST_NUMBER 66
+#define TEST_NUMBER 74
 
 // ------------------------------------------------------------
 // Layout. Every number here is derived, not guessed - see the
@@ -1685,9 +1785,9 @@ static uint32_t lastTouchMs   = 0;
 static uint8_t  blBeforeSaver = 100;
 
 // ---- clock display ----
-// Display only. The DS3231 is written in 24 hour form whatever this
-// says, so nothing in the driver has to know about it.
-static bool use12h = false;
+// TEST073: display is always 12-hour AM/PM. The DS3231 itself stays
+// in 24-hour form, so storage and bus time remain unambiguous.
+static bool use12h = true;
 
 // h is 0..23. Returns 1..12 and sets suffix to "AM" or "PM".
 // Written out rather than using h % 12, which maps both midnight
@@ -1898,6 +1998,43 @@ static bool rtcWriteRegs(uint8_t reg, const uint8_t *data, size_t len) {
   return i2c_master_transmit(devRTC, tx, len + 1, 100) == ESP_OK;
 }
 
+static void rtcDiagnosticDump(const char *reason) {
+#if PANEL_ID == 2
+  (void)reason;
+  return;
+#else
+  uint8_t raw[7] = {0};
+  uint8_t st = 0xFF;
+  bool timeOK = rtcReadRegs(RTC_REG_TIME, raw, 7);
+  bool statOK = rtcReadRegs(RTC_REG_STAT, &st, 1);
+
+  Serial.println();
+  Serial.printf("=== RTC DIAGNOSTIC: %s ===\n", reason ? reason : "manual");
+  Serial.printf("RTC time read : %s\n", timeOK ? "OK" : "FAILED");
+
+  if (timeOK) {
+    uint8_t sec = bcd2dec(raw[0] & 0x7F);
+    uint8_t min = bcd2dec(raw[1] & 0x7F);
+    uint8_t hour = bcd2dec(raw[2] & 0x3F);
+    uint8_t day = bcd2dec(raw[4] & 0x3F);
+    uint8_t mon = bcd2dec(raw[5] & 0x1F);
+    uint16_t yr = (uint16_t)(2000 + bcd2dec(raw[6]));
+
+    Serial.printf("raw 00..06   : %02X %02X %02X %02X %02X %02X %02X\n",
+                  raw[0], raw[1], raw[2], raw[3], raw[4], raw[5], raw[6]);
+    Serial.printf("decoded       : %04u-%02u-%02u %02u:%02u:%02u\n",
+                  yr, mon, day, hour, min, sec);
+  }
+
+  if (statOK)
+    Serial.printf("RTC status    : OK  0x%02X  OSF=%u\n", st, (st & 0x80) ? 1 : 0);
+  else
+    Serial.println("RTC status    : FAILED");
+
+  Serial.println("================================");
+  Serial.println();
+#endif
+}
 static uint8_t dayOfWeek(uint16_t y, uint8_t m, uint8_t d);
 
 static uint16_t rsTxSeq = 0;
@@ -1956,6 +2093,14 @@ static void rs485ClockSendTick() {
 
   if (!now.valid || now.wasStopped) {
     Serial.println("[RTC] CLOCK NOT READY - nothing sent");
+
+    // TEST070: keep the evidence visible after Serial Monitor attaches.
+    static uint32_t lastRtcDiagMs = 0;
+    uint32_t diagNowMs = millis();
+    if (lastRtcDiagMs == 0 || diagNowMs - lastRtcDiagMs >= 5000UL) {
+      lastRtcDiagMs = diagNowMs;
+      rtcDiagnosticDump("CLOCK NOT READY - live diagnostic");
+    }
     return;
   }
 
@@ -1982,6 +2127,17 @@ static void rs485ClockSendTick() {
 
   rs485WaitForTimeAck(rsTxSeq);
   ++rsTxSeq;
+#endif
+}
+static void rs485FeedbackPoll() {
+#if PANEL_ID == 1
+  TimeFrame ignored{};
+  // rsReadFrame() also handles every 4-byte BedBox feedback frame it sees.
+  // Any complete A5 frame left over here is simply drained; the synchronous
+  // TIME send already waited for its matching ACK before we get here.
+  while (rsReadFrame(ignored)) {
+    // No action required for late/stale A5 frames on Shemi.
+  }
 #endif
 }
 static void rs485ClockPoll() {
@@ -2036,6 +2192,11 @@ static void rs485ClockPoll() {
 }
 
 static void rtcRead() {
+  static bool rtcBootDumpDone = false;
+  if (!rtcBootDumpDone) {
+    rtcBootDumpDone = true;
+    rtcDiagnosticDump("first rtcRead after boot");
+  }
 #if PANEL_ID == 2
   return;  // Ira clock comes from Shemi over RS485.
 #endif
@@ -2236,7 +2397,7 @@ static void cfgLoad() {
   alarmOn    = (b[3] & 0x02) != 0;
   // Bit 2 was always zero before TEST 028, so an older record reads
   // as 24 hour - which is what it was. No version bump needed.
-  use12h     = (b[3] & 0x04) != 0;
+  use12h     = true;   // TEST073: display is always 12-hour AM/PM
   alarmOnce  = (b[3] & 0x08) != 0;   // 0 = every day, as older records meant
   blMin      = b[4];
   blMax      = b[5];
@@ -2857,7 +3018,7 @@ static lv_obj_t *lblBlVal = NULL;                 // brightness in use now
 static lv_obj_t *sldBlMin = NULL, *lblBlMin = NULL;
 static lv_obj_t *sldBlMax = NULL, *lblBlMax = NULL;
 static lv_obj_t *swAuto   = NULL;
-static lv_obj_t *sw12h    = NULL;
+static lv_obj_t *btnAM    = NULL, *btnPM = NULL;
 static lv_obj_t *sldSpeed = NULL, *lblAutoSpeed = NULL;
 static lv_obj_t *sldSaverAfter = NULL, *lblSaverAfter = NULL;
 static lv_obj_t *sldSaverBright = NULL, *lblSaverBright = NULL;
@@ -2895,17 +3056,38 @@ static void refreshSetLabels() {
 // Pull the fields from the chip. Called on every entry to the
 // screen, not once at boot - otherwise a later visit shows stale
 // numbers and Set would move a correct clock backwards.
+static void refreshAmPmButtons();
+
 static void seedFromRTC() {
   if (now.valid && !now.wasStopped) {
     setH = now.hour; setMi = now.min;
     setD = now.day;  setMo = now.month; setY = now.year;
   }
   refreshSetLabels();
+  refreshAmPmButtons();
   if (lblSetStatus) lv_label_set_text(lblSetStatus, "");
 }
 
-static void evSetHUp (lv_event_t *e) { setH  = (uint8_t)((setH + 1) % 24); refreshSetLabels(); }
-static void evSetHDn (lv_event_t *e) { setH  = (uint8_t)((setH + 23) % 24); refreshSetLabels(); }
+
+
+static void evSetHUp(lv_event_t *e) {
+  (void)e;
+  const uint8_t base = (setH >= 12) ? 12 : 0;
+  uint8_t h = (uint8_t)(setH % 12);     // 0 means 12 on the face
+  h = (uint8_t)((h + 1) % 12);          // 12 -> 1, 11 -> 12
+  setH = (uint8_t)(base + h);
+  refreshSetLabels();
+  refreshAmPmButtons();
+}
+static void evSetHDn(lv_event_t *e) {
+  (void)e;
+  const uint8_t base = (setH >= 12) ? 12 : 0;
+  uint8_t h = (uint8_t)(setH % 12);
+  h = (uint8_t)((h + 11) % 12);         // 1 -> 12, 12 -> 11
+  setH = (uint8_t)(base + h);
+  refreshSetLabels();
+  refreshAmPmButtons();
+}
 static void evSetMiUp(lv_event_t *e) { setMi = (uint8_t)((setMi + 1) % 60); refreshSetLabels(); }
 static void evSetMiDn(lv_event_t *e) { setMi = (uint8_t)((setMi + 59) % 60); refreshSetLabels(); }
 static void evSetDUp (lv_event_t *e) { setD  = (uint8_t)(setD  % daysInMonth(setMo, setY) + 1); refreshSetLabels(); }
@@ -2917,12 +3099,46 @@ static void evSetMoDn(lv_event_t *e) { setMo = (uint8_t)(setMo <= 1 ? 12 : setMo
 static void evSetYUp (lv_event_t *e) { if (setY < 2099) setY++; refreshSetLabels(); }
 static void evSetYDn (lv_event_t *e) { if (setY > 2000) setY--; refreshSetLabels(); }
 
-static void ev12h(lv_event_t *e) {
-  use12h = lv_obj_has_state(lv_event_get_target(e), LV_STATE_CHECKED);
-  cfgTouched();
+static void refreshAmPmButtons() {
+  const bool pm = (setH >= 12);
+
+  if (btnAM) {
+    lv_obj_set_style_bg_color(btnAM,
+        lv_color_hex(pm ? 0x2A3040 : SET_GREEN), 0);
+    lv_obj_set_style_border_color(btnAM,
+        lv_color_hex(pm ? 0x4A5262 : 0x9BF0BE), 0);
+    lv_obj_set_style_border_width(btnAM, pm ? 1 : 3, 0);
+  }
+
+  if (btnPM) {
+    lv_obj_set_style_bg_color(btnPM,
+        lv_color_hex(pm ? SET_GREEN : 0x2A3040), 0);
+    lv_obj_set_style_border_color(btnPM,
+        lv_color_hex(pm ? 0x9BF0BE : 0x4A5262), 0);
+    lv_obj_set_style_border_width(btnPM, pm ? 3 : 1, 0);
+  }
+}
+
+static void evAM(lv_event_t *e) {
+  (void)e;
+  setH = (uint8_t)(setH % 12);          // 12 PM -> 12 AM, 3 PM -> 3 AM
+  use12h = true;
   refreshSetLabels();
+  refreshAmPmButtons();
   refreshAlarm();
-  Serial.printf("clock display: %s\n", use12h ? "12 hour" : "24 hour");
+  cfgTouched();
+  Serial.println("clock setter: AM");
+}
+
+static void evPM(lv_event_t *e) {
+  (void)e;
+  setH = (uint8_t)((setH % 12) + 12);   // 12 AM -> 12 PM, 3 AM -> 3 PM
+  use12h = true;
+  refreshSetLabels();
+  refreshAmPmButtons();
+  refreshAlarm();
+  cfgTouched();
+  Serial.println("clock setter: PM");
 }
 
 static void evDoSetTime(lv_event_t *e) {
@@ -3146,7 +3362,7 @@ static lv_obj_t *setBigLabel(lv_obj_t *parent, const char *txt) {
 #define P_MAPAL     "\xD7\x9C\xD7\xA4\xD7\x9E"                          // ׳³ֲ׳³ג‚×׳³ֲ
 #define P_ALIYA     "\xD7\x94\xD7\x99\xD7\x99\xD7\x9C\xD7\xA2"          // ׳³ֲ¢׳³ֲ׳³ג„¢׳³ג„¢׳³ג€
 #define P_NADNEDA   "\xD7\x94\xD7\x93\xD7\xA0\xD7\x93\xD7\xA0"          // ׳³ֲ ׳³ג€׳³ֲ ׳³ג€׳³ג€
-#define P_MALE      "\xD7\x90\xD7\x9C\xD7\x9E"                          // ׳³ֲ׳³ֲ׳³ֲ
+#define P_HAKOL     "\xD7\x9C\xD7\x9B\xD7\x94"                          // ׳³ֲ׳³ֲ׳³ֲ
 #define P_ALACHSON  "\xD7\x9F\xD7\x95\xD7\xA1\xD7\x9B\xD7\x9C\xD7\x90"  // ׳³ֲ׳³ֲ׳³ג€÷׳³ֲ¡׳³ג€¢׳³ֲ
 #define P_TZAD      "\xD7\x93\xD7\xA6"                                  // ׳³ֲ¦׳³ג€
 #define P_SICHRUR   "\xD7\xA8\xD7\x95\xD7\xA8\xD7\x97\xD7\xA1"          // ׳³ֲ¡׳³ג€”׳³ֲ¨׳³ג€¢׳³ֲ¨
@@ -3170,6 +3386,24 @@ static lv_obj_t *setBigLabel(lv_obj_t *parent, const char *txt) {
 
 static lv_obj_t *patTile[12];
 static lv_obj_t *sldZone[4];
+static lv_obj_t *lblZoneValue[4] = {NULL, NULL, NULL, NULL};
+static void handleBedboxLevelFeedback(uint8_t bedId, uint8_t cmd,
+                                      uint8_t zone, uint8_t level) {
+  if (cmd != 20) return;
+  if (bedId != 1 && bedId != 0) return;
+  if (zone >= 4 || level > 100) return;
+
+  if (sldZone[zone]) {
+    // Programmatic set does not fire LV_EVENT_VALUE_CHANGED in LVGL,
+    // so this cannot echo another command back to the BedBox.
+    lv_slider_set_value(sldZone[zone], level, LV_ANIM_ON);
+    if (lblZoneValue[zone])
+      lv_label_set_text_fmt(lblZoneValue[zone], "%u%%", level);
+  }
+
+  Serial.printf("[BEDBOX FB] bed=%u zone=%u level=%u\n",
+                bedId, zone, level);
+}
 static int  massPattern = -1;
 static int  massTimer   = 30;          // minutes chosen
 static uint32_t massEnd = 0;           // millis deadline, 0 = not running
@@ -3179,7 +3413,7 @@ static lv_obj_t *sldMassTimer = NULL, *swMassage = NULL;
 // The twelve colours from TEST 041 lasted three tests - Shemi asked
 // for the quiet TEST 081 look back: dark tiles, the chosen one lit.
 static const char *kPatName[12] = {
-  P_MAPAL,    P_ALIYA,   P_NADNEDA, P_MALE,
+  P_MAPAL,    P_ALIYA,   P_NADNEDA, P_HAKOL,
   P_ALACHSON, P_TZAD,    P_SICHRUR, P_LISHA,
   P_DOFEK,    P_NESHIMA, P_GESHEM,  P_AKRAI
 };
@@ -3286,6 +3520,21 @@ static lv_obj_t *navBack(lv_obj_t *scr, const char *title) {
   return t;
 }
 
+static constexpr uint8_t BED_CMD_OFF    = 0;
+static constexpr uint8_t BED_CMD_ALL    = 1;
+static constexpr uint8_t BED_CMD_ZONE   = 2;
+static constexpr uint8_t BED_CMD_PRESET = 4;
+static constexpr uint8_t BED_CMD_TIMER  = 5;
+static constexpr uint8_t BED_ID_SHEMI   = 1;
+static constexpr uint8_t BED_DEFAULT_LEVEL = 60;
+
+static void sendBedCommand(uint8_t cmd, uint8_t target, uint8_t value) {
+  uint8_t f[4] = { BED_ID_SHEMI, cmd, target, value };
+  RS485.write(f, sizeof(f));
+  RS485.flush();
+  Serial.printf("[BED TX] bed=%u cmd=%u target=%u value=%u\n",
+                f[0], f[1], f[2], f[3]);
+}
 // ---------------- Massage ----------------
 
 static void refreshPatTiles() {
@@ -3322,9 +3571,29 @@ static void refreshPatTiles() {
 
 static void evPreset(lv_event_t *e) {
   int i = (int)(intptr_t)lv_event_get_user_data(e);
-  massPattern = (massPattern == i) ? -1 : i;
-  bedRunning  = (massPattern >= 0);
-  if (!bedRunning) massEnd = 0;
+
+  if (massPattern == i) {
+    massPattern = -1;
+    bedRunning = false;
+    massEnd = 0;
+    sendBedCommand(BED_CMD_OFF, 0, 0);
+  } else {
+    massPattern = i;
+    bedRunning = true;
+
+    // TEST071: FULL is tile 3 in the actual UI order.
+    // UI 0,1,2 -> BedBox presets 0,1,2
+    // UI 3     -> ALL motors 100 percent
+    // UI 4..11 -> BedBox presets 3..10
+    if (i == 3) {
+      sendBedCommand(BED_CMD_ALL, 0, 100);
+    } else if (i >= 0 && i < 3) {
+      sendBedCommand(BED_CMD_PRESET, (uint8_t)i, BED_DEFAULT_LEVEL);
+    } else if (i >= 4 && i <= 11) {
+      sendBedCommand(BED_CMD_PRESET, (uint8_t)(i - 1), BED_DEFAULT_LEVEL);
+    }
+  }
+
   refreshPatTiles();
   Serial.printf("[massage] pattern %d\n", massPattern);
 }
@@ -3332,6 +3601,9 @@ static void evPreset(lv_event_t *e) {
 static void evZone(lv_event_t *e) {
   int z = (int)(intptr_t)lv_event_get_user_data(e);
   int v = lv_slider_get_value(lv_event_get_target(e));
+  if (z >= 0 && z < 4 && lblZoneValue[z])
+    lv_label_set_text_fmt(lblZoneValue[z], "%d%%", v);
+  sendBedCommand(BED_CMD_ZONE, (uint8_t)z, (uint8_t)constrain(v, 0, 100));
   Serial.printf("[massage] zone %d = %d\n", z + 1, v);
 }
 
@@ -3350,6 +3622,7 @@ static void massStart(int minutes) {
   }
   massEnd = millis() + (uint32_t)massTimer * 60000UL;
   if (massEnd == 0) massEnd = 1;        // 0 is the "not running" marker
+  sendBedCommand(BED_CMD_TIMER, 0, (uint8_t)massTimer);
   refreshPatTiles();
   Serial.printf("[massage] timer %d min\n", massTimer);
 }
@@ -3374,8 +3647,21 @@ static void evMassTimerDone(lv_event_t *e) { massStart(massTimer); }
 
 static void evMassPower(lv_event_t *e) {
   bedRunning = lv_obj_has_state(lv_event_get_target(e), LV_STATE_CHECKED);
-  if (!bedRunning) { massPattern = -1; massEnd = 0; }
-  else if (massPattern < 0) massPattern = 0;   // a switch that does nothing is worse
+
+  if (!bedRunning) {
+    massPattern = -1;
+    massEnd = 0;
+    sendBedCommand(BED_CMD_OFF, 0, 0);
+  } else {
+    if (massPattern < 0) massPattern = 0;
+    if (massPattern == 3)
+      sendBedCommand(BED_CMD_ALL, 0, 100);
+    else if (massPattern >= 0 && massPattern < 3)
+      sendBedCommand(BED_CMD_PRESET, (uint8_t)massPattern, BED_DEFAULT_LEVEL);
+    else if (massPattern >= 4 && massPattern <= 11)
+      sendBedCommand(BED_CMD_PRESET, (uint8_t)(massPattern - 1), BED_DEFAULT_LEVEL);
+  }
+
   refreshPatTiles();
   Serial.printf("[massage] %s\n", bedRunning ? "on" : "off");
 }
@@ -3387,6 +3673,7 @@ static void massTick() {
   massEnd = 0;
   massPattern = -1;
   bedRunning = false;
+  sendBedCommand(BED_CMD_OFF, 0, 0);
   refreshPatTiles();
   Serial.println("[massage] timer expired - massage off");
 }
@@ -3426,7 +3713,7 @@ static void buildMassage() {
   // Four upright zone sliders. Numbered, not named: a Hebrew word
   // will not fit legibly in a 34 px column, and 1 head, 2 upper
   // back, 3 lower back, 4 legs is the order of the bed itself.
-  const int SW = 34, SH = 300, SX = 776, SY = 108, SGX = 58;
+  const int SW = 20, SH = 300, SX = 783, SY = 108, SGX = 58;
   for (int z = 0; z < 4; z++) {
     int x = SX + z * SGX;
 
@@ -3434,6 +3721,16 @@ static void buildMassage() {
     lv_obj_set_size(sldZone[z], SW, SH);      // taller than wide = upright
     lv_obj_align(sldZone[z], LV_ALIGN_TOP_LEFT, x, SY);
     lv_slider_set_range(sldZone[z], 0, 100);
+    // TEST071: thin track, but keep the thumb/knob easy to see and grab.
+    lv_obj_set_style_pad_all(sldZone[z], 7, LV_PART_KNOB);
+
+    lblZoneValue[z] = lv_label_create(scrMassage);
+    lv_label_set_text(lblZoneValue[z], "0%");
+    lv_obj_set_style_text_font(lblZoneValue[z], &lv_font_montserrat_26, 0);
+    lv_obj_set_style_text_color(lblZoneValue[z], lv_color_hex(0xFFFFFF), 0);
+    lv_obj_set_width(lblZoneValue[z], 56);
+    lv_obj_set_style_text_align(lblZoneValue[z], LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_align(lblZoneValue[z], LV_ALIGN_TOP_LEFT, x - 18, 78);
     lv_obj_set_style_bg_color(sldZone[z], lv_color_hex(0x1A1E2A), LV_PART_MAIN);
     lv_obj_set_style_bg_color(sldZone[z], lv_color_hex(0x12B886), LV_PART_INDICATOR);
     lv_obj_set_style_bg_color(sldZone[z], lv_color_hex(0x2BD4A0), LV_PART_KNOB);
@@ -4796,15 +5093,21 @@ static void buildSettings() {
                         evDoSetTime, SET_GREEN);
   lv_obj_align(sb, LV_ALIGN_TOP_MID, 0, 282);
 
-  // The 12 hour switch lives at the BOTTOM now, caption under it.
-  sw12h = makeToggle(tClock, ev12h, use12h);
-  lv_obj_align(sw12h, LV_ALIGN_BOTTOM_RIGHT, -28, -46);
+  // TEST073: direct AM / PM selection. Two small round push buttons.
+  // The active half-day lights green; there is no 12/24 switch anymore.
+  btnAM = setBtn(tClock, 64, 64, "AM", evAM, 0x2A3040);
+  lv_obj_set_style_radius(btnAM, LV_RADIUS_CIRCLE, 0);
+  lv_obj_set_style_border_width(btnAM, 1, 0);
+  lv_obj_set_style_border_color(btnAM, lv_color_hex(0x4A5262), 0);
+  lv_obj_align(btnAM, LV_ALIGN_BOTTOM_RIGHT, -110, -38);
 
-  lv_obj_t *c12 = lv_label_create(tClock);
-  lv_label_set_text(c12, "12 hour (AM / PM)");
-  lv_obj_set_style_text_font(c12, &lv_font_montserrat_16, 0);
-  lv_obj_set_style_text_color(c12, lv_color_hex(0xD8DEE8), 0);
-  lv_obj_align(c12, LV_ALIGN_BOTTOM_RIGHT, -50, -14);
+  btnPM = setBtn(tClock, 64, 64, "PM", evPM, 0x2A3040);
+  lv_obj_set_style_radius(btnPM, LV_RADIUS_CIRCLE, 0);
+  lv_obj_set_style_border_width(btnPM, 1, 0);
+  lv_obj_set_style_border_color(btnPM, lv_color_hex(0x4A5262), 0);
+  lv_obj_align(btnPM, LV_ALIGN_BOTTOM_RIGHT, -28, -38);
+
+  refreshAmPmButtons();
 
   lblSetStatus = lv_label_create(tClock);
   lv_label_set_text(lblSetStatus, "");
@@ -5121,7 +5424,7 @@ void setup() {
   delay(500);
 
   Serial.println();
-  Serial.println("=== PANEL SHEMI - TEST 066 - MATCHED PAIR + SEIKO NIGHT SCREENSAVER ===");
+  Serial.println("=== PANEL SHEMI - TEST 071 - MATCHED PAIR + SEIKO NIGHT SCREENSAVER ===");
   Serial.printf("psram: %lu free of %lu\n",
                 (unsigned long)ESP.getFreePsram(),
                 (unsigned long)ESP.getPsramSize());
@@ -5308,6 +5611,7 @@ static void printHelp() {
 void loop() {
 #if PANEL_ID == 1
   rs485ClockSendTick();
+  rs485FeedbackPoll();        // TEST067: BedBox -> panel zone levels
 #else
   rs485ClockPoll();
 #endif
@@ -5408,5 +5712,5 @@ void loop() {
 }
 
 // ============================================================
-// END PANEL IRA - TEST 083 - 7B FULL UI + RS485 REMOTE CLOCK
+// END PANEL SHEMI - TEST 074 - MATCHED PAIR + SEIKO NIGHT SCREENSAVER
 // ============================================================
