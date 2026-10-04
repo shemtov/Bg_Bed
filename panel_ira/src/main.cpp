@@ -1,8 +1,96 @@
 // ============================================================
-// PANEL IRA - TEST 089 - MATCHED PAIR + SEIKO NIGHT SCREENSAVER
+// PANEL IRA - TEST 119 - DREAM WAIT ANIMATION
+// Dream player: visible eight-dot wave during verified WAV transfer.
+// Design 8: tall right recordings panel, 186px record control, live stereo VU.
+// ============================================================
+// TEST111 connects the complete Massage control path to the addressed IRA
+// BedBox. The existing Shemi command set (OFF, ALL, ZONE, PRESET, TIMER) is
+// sent as A5 type 0x30 to node 5 and acknowledged by type 0x31. Replies update
+// the four zone readouts on the IRA screen. Shemi and IRA remain independent.
 // ============================================================
 //
 // Board: Waveshare ESP32-S3-Touch-LCD-7B, 1024 x 600
+// TEST103 - APPROVED TEN-TILE HOME; ORIGINAL WALL LAMPS; FAN FRAMES
+// NOT YET HARDWARE PROVEN. Shemi coordinates radio bus slots for both panels.
+//   Serial "ap" resumes the shared last station/volume; "as" stops.
+//   Both panels use scheduled bus slots. Commands use
+//   a 14-byte A5 frame and require a matching TYPE 0x21 ACK.
+//   Alarm start queues PLAY; Stop/Snooze/disarm/invalid RTC/timeout queue STOP.
+//   Pair: Shemi TEST091 / Ira TEST103 / AudioNode TEST036.
+//   64 shared presets, eight per page; radio dial and six slow player-state bars.
+//   Alarm target 11/21 (~52%). No BedBox vibration commands added.
+//   Radio requests are processed in loop(), never while holding the LVGL lock.
+//   NOT YET HARDWARE PROVEN.
+// TEST074 - BUILD FIX FOR AM / PM BUTTONS
+//   TEST073 did not compile because seedFromRTC() calls
+//   refreshAmPmButtons() before the compiler has seen its declaration.
+//   Adds the forward declaration before seedFromRTC().
+//   No UI behavior, RTC, RS485, massage or audio logic changed.
+//   NOT YET RUN ON HARDWARE.
+// TEST073 - CLOCK SETTING: DIRECT AM / PM BUTTONS
+//   Removes the 12-hour ON/OFF switch from the Clock settings tab.
+//   Replaces it with two small round buttons: AM and PM.
+//   The selected half-day lights green; the other stays dark.
+//   Pressing AM/PM changes only the half-day, not the displayed hour.
+//   Hour +/- now cycles 1..12 inside the selected AM/PM half.
+//   The DS3231 still stores and receives 24-hour time internally.
+//   Clock display is now always 12-hour AM/PM.
+//   Massage, feedback, RTC validity and RS485 logic are unchanged.
+//   NOT YET RUN ON HARDWARE.
+// TEST072 - BUILD FIX FOR MASSAGE SLIDER VALUE FONT
+//   TEST071 did not compile because lv_font_montserrat_20 is not enabled
+//   in this Waveshare LVGL build.
+//   The live percentage labels above the four massage sliders now use
+//   the already-enabled lv_font_montserrat_26.
+//   No massage mapping, slider geometry, feedback, RTC or RS485 logic changed.
+//   NOT YET RUN ON HARDWARE.
+// TEST071 - MASSAGE FULL + SLIDER READOUT
+//   Fixes the FULL tile mapping. FULL is UI tile index 3, not 11.
+//   Tile 3 now sends CMD_ALL=100 to the BedBox.
+//   UI tiles after FULL map down by one to BedBox presets 3..10.
+//   FULL label changed from "מלא" to "הכל".
+//   Four zone sliders are slimmer, while the knob stays visually large.
+//   Each slider now shows its exact live percentage above it.
+//   The displayed number follows both finger movement and BedBox feedback.
+//   RTC TEST070 diagnostic remains unchanged.
+//   NOT YET RUN ON HARDWARE.
+// TEST070 - RTC DIAGNOSTIC MADE VISIBLE
+//   TEST069 printed the RTC dump too early in boot, before the Serial
+//   Monitor was reliably attached, so the useful line could be missed.
+//   While CLOCK NOT READY persists, TEST070 prints the full RTC dump
+//   every 5 seconds. No RTC state is changed and no Set Time is done.
+//   Massage, feedback and RS485 behaviour are unchanged.
+//   NOT YET RUN ON HARDWARE.
+// TEST069 - RTC BACKUP / OSF DIAGNOSTIC
+//   Diagnostic-only change.
+//   Prints raw DS3231 time/date and status register 0x0F at boot.
+//   This tells us whether the clock value survived power-off and
+//   whether OSF (Oscillator Stop Flag, bit 7) is set.
+//   Massage, feedback and RS485 behaviour are unchanged.
+//   NOT YET RUN ON HARDWARE.
+// TEST068 - MASSAGE CLOSED LOOP RESTORED
+//   TEST067 restored BedBox -> panel feedback, but the current 7-inch
+//   massage handlers only changed the UI and printed to USB Serial.
+//   They did NOT send motor commands to the BedBox.
+//   TEST068 restores the proven 4-byte BedBox downlink:
+//       {bedId, cmd, target, value}
+//   on the SAME onboard RS485 Serial1 bus.
+//   Commands:
+//       0 OFF, 1 ALL, 2 ZONE, 4 PRESET, 5 TIMER
+//   The 12th "Full" tile sends ALL=100; patterns 0..10 send PRESET.
+//   TEST067 feedback remains in place:
+//       {bedId, 20, zone, level}
+//   NOT YET RUN ON HARDWARE.
+// TEST067 - BEDBOX FEEDBACK RESTORED
+//   Restores the hardware-proven TEST077/BedBox TEST012 feedback behaviour
+//   to the current 7-inch panel.
+//   BedBox reports remain the proven 4-byte form:
+//       {bedId, 20, zone, level}
+//   The panel now accepts those reports on the SAME RS485 stream while
+//   preserving the existing 14-byte A5 TIME/ACK traffic.
+//   Slider updates are display-only: lv_slider_set_value() does not
+//   generate another motor command.
+//   NOT YET RUN ON HARDWARE - build/flash required for confirmation.
 //
 // WHAT CHANGED IN TEST 083:
 //   Fixes TEST082 build failure: the generated setup Serial.println()
@@ -313,7 +401,7 @@
 //   copy. These twelve are mine, spread around the wheel so no two
 //   neighbours in the grid are close.
 //
-//   THE ZONE NAMES ARE FROM TEST 075 and are stored back to front,
+//   THE ZONE NAMES ARE FROM historical TEST 075 and are stored back to front,
 //   like every other Hebrew string here - LVGL has no bidirectional
 //   text. Do not reorder them in an editor.
 //
@@ -1461,17 +1549,23 @@
 // ============================================================
 
 #include <Arduino.h>
+#include "freertos/FreeRTOS.h"
+#include "freertos/queue.h"
 #include <math.h>   // log10f, for the logarithmic lux mapping
 #include "lvgl_port.h"
 #include "rgb_lcd_port.h"
 #include "io_extension.h"
 #include "i2c.h"        // DEV_I2C_Port, driver/i2c_master.h
 
+#include "dream_img.h"    // Original sleeping-figure artwork, restored unchanged.
 #include "tile_img.h"       // img_bed_off/on, img_radio_off/on,
                             // img_ac_off/on, img_shade_open/closed
+#include "home_selected_assets.h"
 #include "lamp_img.h"       // img_lamp
 #include "fan_img.h"        // img_fan - recovered from TEST 082
 #include "font_hebrew.h"     // font_hebrew_28
+#include "saver_date_font.h" // Compact 75% day/date window, regular 20px.
+#include "clock_fonts.h" // regular-weight Clock fonts: 56 / 40 / 28
 #include "alarm_img.h"      // img_alarm_on / img_alarm_off
 #include "boot_photo.h"     // BOOT_SHEMI_JPG / BOOT_IRA_JPG
 #include <JPEGDEC.h>
@@ -1487,9 +1581,35 @@
 
 static constexpr uint8_t NODE_SHEMI  = 1;
 static constexpr uint8_t NODE_IRA    = 2;
+static constexpr uint8_t NODE_AUDIO  = 3;
+static constexpr uint8_t NODE_BEDBOX_IRA = 5;
 static constexpr uint8_t FRAME_START = 0xA5;
 static constexpr uint8_t TYPE_TIME   = 0x10;
 static constexpr uint8_t TYPE_ACK    = 0x11;
+static constexpr uint8_t TYPE_AUDIO_CMD = 0x20;
+static constexpr uint8_t TYPE_AUDIO_ACK = 0x21;
+static constexpr uint8_t TYPE_BED_CMD   = 0x30;
+static constexpr uint8_t TYPE_BED_REPLY = 0x31;
+static constexpr uint8_t TYPE_AC_CMD    = 0x40;
+static constexpr uint8_t TYPE_AC_REPLY  = 0x41;
+static constexpr uint8_t TYPE_BED_MOTOR_TEST  = 0x32;
+static constexpr uint8_t TYPE_BED_MOTOR_REPLY = 0x33;
+static constexpr uint8_t BED_CMD_OFF    = 0;
+static constexpr uint8_t BED_CMD_ALL    = 1;
+static constexpr uint8_t BED_CMD_ZONE   = 2;
+static constexpr uint8_t BED_CMD_MOTOR  = 3;
+static constexpr uint8_t BED_CMD_PRESET = 4;
+static constexpr uint8_t BED_CMD_TIMER  = 5;
+static constexpr uint8_t IRA_MOTOR_TEST_LEVEL = 35;
+static constexpr uint8_t IRA_MOTOR_TEST_HOLD_SECONDS = 3;
+
+static char rsBedStatus[96] = "BedBox IRA: ready";
+static uint32_t rsBedTestActiveUntil = 0;
+static char rsAcStatus[96] = "AC IR: ready";
+static uint32_t rsAcStatusUntil = 0;
+static void rsSetBedStatus(const char *text) {
+  snprintf(rsBedStatus, sizeof(rsBedStatus), "%s", text ? text : "");
+}
 
 struct TimeFrame {
   uint8_t start;
@@ -1546,15 +1666,45 @@ static void rsSendFrame(const TimeFrame &f) {
   RS485.flush();
 }
 
+static void handleBedboxLevelFeedback(uint8_t bedId, uint8_t cmd,
+                                      uint8_t zone, uint8_t level);
 static bool rsReadFrame(TimeFrame &out) {
   static uint8_t buf[sizeof(TimeFrame)];
   static size_t pos = 0;
+
+  // TEST067: legacy BedBox feedback lives beside the A5 TIME/ACK stream.
+  // Only valid {bedId,20,zone,level} frames are acted on.
+  static uint8_t rpt[4] = {0, 0, 0, 0};
+  static size_t rptPos = 0;
 
   while (RS485.available()) {
     const uint8_t b = uint8_t(RS485.read());
 
     if (pos == 0) {
-      if (b != FRAME_START) continue;
+      if (b != FRAME_START) {
+        // TEST067: collect non-A5 bytes as possible 4-byte BedBox feedback.
+        rpt[rptPos++] = b;
+
+        if (rptPos == 4) {
+          if ((rpt[0] == PANEL_ID) &&
+              rpt[1] == 20 &&
+              rpt[2] < 4 &&
+              rpt[3] <= 100) {
+            handleBedboxLevelFeedback(rpt[0], rpt[1], rpt[2], rpt[3]);
+            rptPos = 0;
+          } else {
+            // Sliding-window resync: keep the last 3 bytes.
+            rpt[0] = rpt[1];
+            rpt[1] = rpt[2];
+            rpt[2] = rpt[3];
+            rptPos = 3;
+          }
+        }
+        continue;
+      }
+
+      // An A5 frame starts here. A partial legacy candidate cannot span it.
+      rptPos = 0;
       buf[pos++] = b;
       continue;
     }
@@ -1570,6 +1720,204 @@ static bool rsReadFrame(TimeFrame &out) {
   return false;
 }
 
+// Final IRA BedBox feedback path, matching the proven Shemi panel protocol.
+// Reply payload is {command, target, value, result}; result 0 is accepted.
+static bool rsDispatchBedboxReply(const TimeFrame &f) {
+  if (f.src != NODE_BEDBOX_IRA || f.dst != PANEL_ID ||
+      f.type != TYPE_BED_REPLY) return false;
+
+  const uint8_t cmd = f.yearLo;
+  const uint8_t target = f.yearHi;
+  const uint8_t value = f.month;
+  const uint8_t result = f.day;
+  Serial.printf("[BED A5 RX] cmd=%u target=%u value=%u result=%u seq=%u\n",
+                cmd, target, value, result, rsFrameSeq(f));
+  if (result != 0) return true;
+
+  char status[96];
+  if (cmd == BED_CMD_OFF) {
+    snprintf(status, sizeof(status), "IRA BedBox: OFF ACK");
+  } else if (cmd == BED_CMD_ALL) {
+    snprintf(status, sizeof(status), "IRA BedBox: all motors %u%% ACK", value);
+  } else if (cmd == BED_CMD_ZONE && target < 4) {
+    snprintf(status, sizeof(status), "IRA BedBox: zone %u %u%% ACK", target + 1, value);
+  } else if (cmd == BED_CMD_MOTOR && target < 7) {
+    snprintf(status, sizeof(status), "IRA BedBox: motor %u level %u ACK",
+             target + 1, value);
+  } else if (cmd == BED_CMD_PRESET) {
+    snprintf(status, sizeof(status), "IRA BedBox: preset %u ACK", target + 1);
+  } else if (cmd == BED_CMD_TIMER) {
+    snprintf(status, sizeof(status), "IRA BedBox: timer %u min ACK", value);
+  } else {
+    snprintf(status, sizeof(status), "IRA BedBox: command ACK");
+  }
+  rsSetBedStatus(status);
+
+  if (cmd == BED_CMD_OFF) {
+    for (uint8_t zone = 0; zone < 4; ++zone)
+      handleBedboxLevelFeedback(PANEL_ID, 20, zone, 0);
+  } else if (cmd == BED_CMD_ALL) {
+    for (uint8_t zone = 0; zone < 4; ++zone)
+      handleBedboxLevelFeedback(PANEL_ID, 20, zone, value);
+  } else if (cmd == BED_CMD_ZONE && target < 4) {
+    handleBedboxLevelFeedback(PANEL_ID, 20, target, value);
+  }
+  return true;
+}
+
+static bool rs485WaitForBedboxReply(uint16_t wantedSeq, uint32_t timeoutMs) {
+  const uint32_t began = millis();
+  TimeFrame rx{};
+  while (millis() - began < timeoutMs) {
+    if (!rsReadFrame(rx)) {
+      delay(1);
+      continue;
+    }
+    if (rx.crc != rsFrameCrc(rx)) continue;
+    const bool wanted = rx.src == NODE_BEDBOX_IRA &&
+                        rx.dst == PANEL_ID && rx.type == TYPE_BED_REPLY &&
+                        rsFrameSeq(rx) == wantedSeq;
+    if (rsDispatchBedboxReply(rx) && wanted) return true;
+  }
+  Serial.printf("[BED A5 TIMEOUT] seq=%u\n", wantedSeq);
+  return false;
+}
+
+static bool rsDispatchAcReply(const TimeFrame &f) {
+  if (f.src != NODE_BEDBOX_IRA || f.dst != PANEL_ID ||
+      f.type != TYPE_AC_REPLY) return false;
+  const uint8_t command = f.yearLo;
+  const uint8_t value = f.month;
+  const uint8_t result = f.day;
+  Serial.printf("[AC IR RX] cmd=%u value=%u result=%u seq=%u\n",
+                command, value, result, rsFrameSeq(f));
+  if (result == 0) {
+    const char *name = command == 0 ? "power" : command == 1 ? "temp" :
+                       command == 2 ? "mode" : command == 3 ? "fan" : "swing";
+    snprintf(rsAcStatus, sizeof(rsAcStatus), "AC IR: %s sent", name);
+    rsAcStatusUntil = millis() + 3000UL;
+  } else {
+    snprintf(rsAcStatus, sizeof(rsAcStatus), "AC IR: rejected");
+    rsAcStatusUntil = millis() + 5000UL;
+  }
+  return true;
+}
+
+static bool rs485WaitForAcReply(uint16_t wantedSeq, uint32_t timeoutMs) {
+  const uint32_t began = millis();
+  TimeFrame rx{};
+  while (millis() - began < timeoutMs) {
+    if (!rsReadFrame(rx)) { delay(1); continue; }
+    if (rx.crc != rsFrameCrc(rx)) continue;
+    const bool wanted = rx.src == NODE_BEDBOX_IRA && rx.dst == PANEL_ID &&
+                        rx.type == TYPE_AC_REPLY && rsFrameSeq(rx) == wantedSeq;
+    if (rsDispatchAcReply(rx) && wanted) return true;
+  }
+  snprintf(rsAcStatus, sizeof(rsAcStatus), "AC IR: no response");
+  rsAcStatusUntil = millis() + 5000UL;
+  Serial.printf("[AC IR TIMEOUT] seq=%u\n", wantedSeq);
+  return false;
+}
+
+// TEST110: transport-only BedBox Ira check. The OFF command is deliberately
+// the only command generated here, so this cannot start a massage pattern.
+static uint16_t rsBedTestSeq = 0;
+static bool rs485BedboxSafeOffTest() {
+  TimeFrame tx{};
+  tx.start = FRAME_START;
+  tx.src = PANEL_ID;
+  tx.dst = NODE_BEDBOX_IRA;
+  tx.type = TYPE_BED_CMD;
+  tx.seqLo = uint8_t(rsBedTestSeq & 0xFF);
+  tx.seqHi = uint8_t(rsBedTestSeq >> 8);
+  tx.yearLo = 0; // command OFF
+  tx.yearHi = 0; // zone unused
+  tx.month = 0;  // level 0
+  tx.crc = rsFrameCrc(tx);
+  const uint16_t wantedSeq = rsBedTestSeq++;
+
+  rsSendFrame(tx);
+  Serial.printf("[BED TEST TX] Ira BedBox OFF seq=%u\n", wantedSeq);
+
+  const uint32_t began = millis();
+  TimeFrame rx{};
+  while (millis() - began < 700UL) {
+    if (!rsReadFrame(rx)) {
+      delay(1);
+      continue;
+    }
+    if (rx.crc != rsFrameCrc(rx)) {
+      Serial.printf("[BED TEST] bad CRC from BedBox seq=%u\n", rsFrameSeq(rx));
+      continue;
+    }
+    if (rx.src == NODE_BEDBOX_IRA &&
+        rx.dst == PANEL_ID &&
+        rx.type == TYPE_BED_REPLY &&
+        rsFrameSeq(rx) == wantedSeq) {
+      Serial.printf("[BED TEST RX] BedBox Ira reply seq=%u cmd=%u zone=%u level=%u result=%u RTT=%lums\n",
+                    wantedSeq, rx.yearLo, rx.yearHi, rx.month, rx.day,
+                    (unsigned long)(millis() - began));
+      return rx.day == 0;
+    }
+  }
+  Serial.printf("[BED TEST TIMEOUT] no Ira BedBox reply seq=%u\n", wantedSeq);
+  return false;
+}
+
+// TEST110: physical output test. This is a separate A5 type so normal
+// massage commands cannot accidentally start the test. The BedBox drives
+// every IRA motor output together, then stops them automatically.
+static bool rs485BedboxMotorTest() {
+  TimeFrame tx{};
+  tx.start = FRAME_START;
+  tx.src = PANEL_ID;
+  tx.dst = NODE_BEDBOX_IRA;
+  tx.type = TYPE_BED_MOTOR_TEST;
+  tx.seqLo = uint8_t(rsBedTestSeq & 0xFF);
+  tx.seqHi = uint8_t(rsBedTestSeq >> 8);
+  tx.yearLo = 1;                         // test mode: ALL outputs
+  tx.yearHi = IRA_MOTOR_TEST_LEVEL;      // level, percent
+  tx.month = IRA_MOTOR_TEST_HOLD_SECONDS;// hold, seconds
+  tx.crc = rsFrameCrc(tx);
+  const uint16_t wantedSeq = rsBedTestSeq++;
+
+  rsSetBedStatus("IRA BedBox: testing ALL motors at 35%...");
+  rsBedTestActiveUntil = millis() +
+                         uint32_t(IRA_MOTOR_TEST_HOLD_SECONDS) * 1000UL;
+  rsSendFrame(tx);
+  Serial.printf("[MOTOR TEST TX] Ira BedBox ALL level=%u%% hold=%us seq=%u\n",
+                IRA_MOTOR_TEST_LEVEL, IRA_MOTOR_TEST_HOLD_SECONDS, wantedSeq);
+
+  const uint32_t began = millis();
+  TimeFrame rx{};
+  while (millis() - began < 800UL) {
+    if (!rsReadFrame(rx)) {
+      delay(1);
+      continue;
+    }
+    if (rx.crc != rsFrameCrc(rx)) continue;
+    if (rx.src == NODE_BEDBOX_IRA && rx.dst == PANEL_ID &&
+        rx.type == TYPE_BED_MOTOR_REPLY && rsFrameSeq(rx) == wantedSeq) {
+      const bool ok = rx.day == 0;
+      Serial.printf("[MOTOR TEST RX] BedBox Ira ALL level=%u%% hold=%us result=%u RTT=%lums\n",
+                    rx.yearHi, rx.month, rx.day,
+                    (unsigned long)(millis() - began));
+      if (ok) rsSetBedStatus("IRA BedBox: ALL motors ON 35% (3 s), ACK OK");
+      else    rsSetBedStatus("IRA BedBox: motor test rejected");
+      return ok;
+    }
+  }
+  rsBedTestActiveUntil = 0;
+  rsSetBedStatus("IRA BedBox: motor test timeout");
+  Serial.printf("[MOTOR TEST TIMEOUT] no Ira BedBox reply seq=%u\n", wantedSeq);
+  return false;
+}
+
+static void evIraMotorTest(lv_event_t *e) {
+  (void)e;
+  rs485BedboxMotorTest();
+}
+
 static bool rsTimeFieldsValid(const TimeFrame &f) {
   const uint16_t y = rsFrameYear(f);
   return y >= 2000 && y <= 2099 &&
@@ -1578,7 +1926,7 @@ static bool rsTimeFieldsValid(const TimeFrame &f) {
          f.hour <= 23 && f.minute <= 59 && f.second <= 59;
 }
 
-#define TEST_NUMBER 89
+#define TEST_NUMBER 119
 
 // ------------------------------------------------------------
 // Layout. Every number here is derived, not guessed - see the
@@ -1588,33 +1936,29 @@ static bool rsTimeFieldsValid(const TimeFrame &f) {
 #define SCREEN_W    1024
 #define SCREEN_H     600
 
-#define TILE_SZ      200
-#define TILE_GAPX     22
-#define TILE_GAPY     16
+#define TILE_SZ      241
+#define TILE_H       162
+#define TILE_GAPX     12
+#define TILE_GAPY     12
 #define TILE_COLS      4
-#define TILE_ROWS      2
+#define TILE_ROWS      3
 
 // (1024 - (4*200 + 3*22)) / 2 = 79
-#define TILE_X0       79
+#define TILE_X0       12
 // status strip above, a little air below
-#define TILE_Y0      108
+#define TILE_Y0       76
 
-// How far the tile artwork is pulled toward black, 0..255. Carried
-// over from TEST 080 unchanged: 110 takes the glare off the white
-// bed without making the icons hard to read.
-// Runtime, not a #define, so it can be tuned live. 0 is the original
-// artwork, 255 is a black square.
-// Lit tiles keep the artwork close to original. Unlit tiles sink
-// well back. The gap between the two is the whole point.
-#define DIM_ON_DEFAULT   10
-#define DIM_OFF_DEFAULT 120
+// Authored on/off assets already provide contrast. Serial dim-on/dim-off
+// controls remain active, with neutral defaults for the selected artwork.
+#define DIM_ON_DEFAULT   0
+#define DIM_OFF_DEFAULT  0
 static uint8_t dimOn  = DIM_ON_DEFAULT;
 static uint8_t dimOff = DIM_OFF_DEFAULT;
 
 // The panel behind the artwork moves too, so an unlit tile recedes
 // twice over.
-#define TILE_BG_ON  0x181C22
-#define TILE_BG_OFF 0x0C0F13
+#define TILE_BG_ON  0x111D29
+#define TILE_BG_OFF 0x111D29
 
 // Backlight, 0..100, straight through the IO expander at 0x24.
 #define BACKLIGHT_DEFAULT 100
@@ -1656,8 +2000,8 @@ static const char *kSaverNames[9] = {
 // older record can be translated instead of thrown away.
 static const uint8_t kSaverLegacy[5] = { 0, 2, 3, 5, 6 };
 
-static uint8_t  saverIdx     = 5;          // 5 minutes
-static uint32_t saverAfterMs = 300000UL;
+static uint8_t  saverIdx     = 2;          // 30 seconds
+static uint32_t saverAfterMs = 30000UL;
 
 // Was a constant in the source until now, which meant the one
 // number deciding how much light sits beside a sleeping head could
@@ -1685,9 +2029,9 @@ static uint32_t lastTouchMs   = 0;
 static uint8_t  blBeforeSaver = 100;
 
 // ---- clock display ----
-// Display only. The DS3231 is written in 24 hour form whatever this
-// says, so nothing in the driver has to know about it.
-static bool use12h = false;
+// TEST073: display is always 12-hour AM/PM. The DS3231 itself stays
+// in 24-hour form, so storage and bus time remain unambiguous.
+static bool use12h = true;
 
 // h is 0..23. Returns 1..12 and sets suffix to "AM" or "PM".
 // Written out rather than using h % 12, which maps both midnight
@@ -1724,6 +2068,7 @@ static float   luxSmooth  = -1.0f;   // negative = not seeded yet
 
 static lv_obj_t *scrHome     = NULL;
 static lv_obj_t *scrSettings = NULL;
+static lv_obj_t *scrDreams   = NULL;
 
 // These two live on the settings screen but are refreshed by
 // sensorTick, which is defined further up the file - so they are
@@ -1731,6 +2076,7 @@ static lv_obj_t *scrSettings = NULL;
 static lv_obj_t *lblNowTime  = NULL;   // live clock, Clock tab
 static lv_obj_t *lblLuxLive  = NULL;   // live lux, Display tab
 static lv_obj_t *lblAcRoom   = NULL;   // live room temperature, AC screen
+static lv_obj_t *lblAcLink   = NULL;   // BedBox IRA IR command status
 
 // The other screens. Declared here because the home tile handlers
 // further down have to load them, and they are built much later.
@@ -1738,7 +2084,11 @@ static lv_obj_t *scrMassage  = NULL;
 static lv_obj_t *scrRadio    = NULL;
 static lv_obj_t *scrAC       = NULL;
 static lv_obj_t *scrFan      = NULL;
+static lv_obj_t *scrLamp     = NULL;
+static lv_obj_t *scrShade    = NULL;
 static lv_obj_t *scrAlarm    = NULL;
+static lv_obj_t *scrSaver    = NULL;
+static lv_obj_t *lblBedLink  = NULL;   // live IRA BedBox motor-test status
 
 // ---- alarm ----
 //
@@ -1760,8 +2110,6 @@ static uint32_t lastRingPulse= 0;
 static int      lastMinSeen  = -1;
 static bool     alarmFirstTick = true;
 static lv_obj_t *lblStatus   = NULL;
-static lv_obj_t *lblClock    = NULL;   // time, top centre
-static lv_obj_t *lblClimate  = NULL;   // temperature, humidity, lux
 
 // ------------------------------------------------------------
 // I2C presence scan
@@ -1898,12 +2246,169 @@ static bool rtcWriteRegs(uint8_t reg, const uint8_t *data, size_t len) {
   return i2c_master_transmit(devRTC, tx, len + 1, 100) == ESP_OK;
 }
 
+static void rtcDiagnosticDump(const char *reason) {
+#if PANEL_ID == 2
+  (void)reason;
+  return;
+#else
+  uint8_t raw[7] = {0};
+  uint8_t st = 0xFF;
+  bool timeOK = rtcReadRegs(RTC_REG_TIME, raw, 7);
+  bool statOK = rtcReadRegs(RTC_REG_STAT, &st, 1);
+
+  Serial.println();
+  Serial.printf("=== RTC DIAGNOSTIC: %s ===\n", reason ? reason : "manual");
+  Serial.printf("RTC time read : %s\n", timeOK ? "OK" : "FAILED");
+
+  if (timeOK) {
+    uint8_t sec = bcd2dec(raw[0] & 0x7F);
+    uint8_t min = bcd2dec(raw[1] & 0x7F);
+    uint8_t hour = bcd2dec(raw[2] & 0x3F);
+    uint8_t day = bcd2dec(raw[4] & 0x3F);
+    uint8_t mon = bcd2dec(raw[5] & 0x1F);
+    uint16_t yr = (uint16_t)(2000 + bcd2dec(raw[6]));
+
+    Serial.printf("raw 00..06   : %02X %02X %02X %02X %02X %02X %02X\n",
+                  raw[0], raw[1], raw[2], raw[3], raw[4], raw[5], raw[6]);
+    Serial.printf("decoded       : %04u-%02u-%02u %02u:%02u:%02u\n",
+                  yr, mon, day, hour, min, sec);
+  }
+
+  if (statOK)
+    Serial.printf("RTC status    : OK  0x%02X  OSF=%u\n", st, (st & 0x80) ? 1 : 0);
+  else
+    Serial.println("RTC status    : FAILED");
+
+  Serial.println("================================");
+  Serial.println();
+#endif
+}
 static uint8_t dayOfWeek(uint16_t y, uint8_t m, uint8_t d);
 
 static uint16_t rsTxSeq = 0;
 static uint32_t rsTxGoodAck = 0;
 static uint32_t rsTxTimeout = 0;
 static uint32_t rsTxBadAck = 0;
+static uint16_t rsAudioSeq = 0;
+
+// Latest desired playback state wins, including volume edits before PLAY is sent.
+struct AudioRequest { uint8_t command, station, volume; };
+struct AudioReply { uint8_t result, state, volume, station, owner, revision; };
+static void servicePanelAudio();
+static uint16_t rsGrantSeq = 0;
+struct BedRequest { uint8_t bytes[4]; };
+struct AcRequest { uint8_t command, value; };
+static QueueHandle_t bedCommandQueue = nullptr;
+static QueueHandle_t acCommandQueue = nullptr;
+static QueueHandle_t alarmAudioQueue = nullptr;
+static QueueHandle_t audioReplyQueue = nullptr;
+static bool alarmAudioOwned = false;
+static void alarmRadioUi(bool on);
+static void radioBrowserCancelSelection();
+static bool queueRadioAudio(uint8_t command, uint8_t station, uint8_t volume) {
+  AudioRequest request{command, station, volume};
+  if (!alarmAudioQueue || xQueueSend(alarmAudioQueue, &request, 0) != pdPASS) {
+    Serial.println("[AUDIO] queue unavailable");
+    return false;
+  }
+  return true;
+}
+static bool queueAlarmAudio(uint8_t command) {
+  radioBrowserCancelSelection();
+  return queueRadioAudio(command, 0, 11); // Groove Salad, ~50% target
+}
+static void stopAlarmAudio() {
+  if (alarmAudioOwned && queueAlarmAudio(2)) {
+    alarmAudioOwned = false;
+    alarmRadioUi(false);
+  }
+}
+
+static bool rs485SendAudioCommand(uint8_t command, uint8_t volume = 11, uint8_t station = 0) {
+  TimeFrame tx{};
+  tx.start = FRAME_START;
+  tx.src = PANEL_ID;
+  tx.dst = NODE_AUDIO;
+  tx.type = TYPE_AUDIO_CMD;
+  tx.seqLo = uint8_t(rsAudioSeq & 0xFF);
+  tx.seqHi = uint8_t(rsAudioSeq >> 8);
+  tx.yearLo = command;  // payload[0]: 1 PLAY, 2 STOP
+  tx.yearHi = station;  // payload[1]: station wire ID
+  tx.month = volume;    // payload[2]: target volume 0..21
+  tx.day = 15;          // payload[3]: fade in 100 ms units = 1.5 s
+  tx.crc = rsFrameCrc(tx);
+
+  const uint16_t wantedSeq = rsAudioSeq++;
+  rsSendFrame(tx);
+  Serial.printf("[AUDIO] TX %s seq=%u station=%u volume=%u fade=1500ms\n",
+                command == 1 ? "PLAY" : command == 2 ? "STOP" : "STATUS", wantedSeq, station, volume);
+
+  const uint32_t startMs = millis();
+  TimeFrame rx{};
+  while (millis() - startMs < 800) {
+    if (!rsReadFrame(rx)) { delay(1); continue; }
+    if (rx.crc != rsFrameCrc(rx)) continue;
+    if (rx.src == NODE_AUDIO && rx.dst == PANEL_ID &&
+        rx.type == TYPE_AUDIO_ACK && rsFrameSeq(rx) == wantedSeq &&
+        rx.yearLo == command) {
+      Serial.printf("[AUDIO] RX ACK seq=%u result=%u state=%u volume=%u RTT=%lums\n",
+                    wantedSeq, rx.yearHi, rx.month, rx.day,
+                    (unsigned long)(millis() - startMs));
+      AudioReply reply{rx.yearHi, rx.month, rx.day, rx.hour, rx.minute, rx.second};
+      if (audioReplyQueue) xQueueOverwrite(audioReplyQueue, &reply);
+      return rx.yearHi == 0;
+    }
+  }
+  Serial.printf("[AUDIO] TIMEOUT seq=%u\n", wantedSeq);
+  AudioReply reply{255, 0, 0, 0, 0, 0};
+  if (audioReplyQueue) xQueueOverwrite(audioReplyQueue, &reply);
+  return false;
+}
+
+#include "radio_catalog_client.h"
+#include "ambient_client.h"
+
+static bool dreamService();
+static void servicePanelAudio() {
+  static uint32_t lastStatus = 0;
+  AudioRequest request;
+  // Ordinary playback and STOP have priority over catalogue chunks.
+  if (alarmAudioQueue && xQueueReceive(alarmAudioQueue, &request, 0) == pdTRUE) {
+    rs485SendAudioCommand(request.command, request.volume, request.station);
+    return;
+  }
+  if (dreamService()) return;
+  if (ambientClientService()) return;
+  if (millis() - lastStatus >= 2000) {
+    rs485SendAudioCommand(4); lastStatus = millis();
+    return;
+  }
+  catalogClientService();
+}
+
+static void accessibilityPrepare(lv_obj_t *screen);
+#include "dream_local.h"
+
+static void grantIraAudio() {
+#if PANEL_ID == 1
+  TimeFrame grant{};
+  grant.start = FRAME_START; grant.src = NODE_SHEMI; grant.dst = NODE_IRA;
+  grant.type = 0x22;
+  grant.seqLo = uint8_t(rsGrantSeq); grant.seqHi = uint8_t(rsGrantSeq >> 8);
+  ++rsGrantSeq;
+  grant.crc = rsFrameCrc(grant);
+  rsSendFrame(grant);
+  TimeFrame rx{};
+  uint32_t began = millis();
+  // Ira closes the slot explicitly after its audio transaction, even on timeout.
+  while (millis() - began < 900) {
+    if (!rsReadFrame(rx)) { delay(1); continue; }
+    if (rx.crc == rsFrameCrc(rx) && rx.src == NODE_IRA &&
+        rx.dst == NODE_SHEMI && rx.type == 0x23 &&
+        rsFrameSeq(rx) == rsFrameSeq(grant)) return;
+  }
+#endif
+}
 
 static bool rs485WaitForTimeAck(uint16_t wantedSeq) {
 #if PANEL_ID == 1
@@ -1956,6 +2461,14 @@ static void rs485ClockSendTick() {
 
   if (!now.valid || now.wasStopped) {
     Serial.println("[RTC] CLOCK NOT READY - nothing sent");
+
+    // TEST070: keep the evidence visible after Serial Monitor attaches.
+    static uint32_t lastRtcDiagMs = 0;
+    uint32_t diagNowMs = millis();
+    if (lastRtcDiagMs == 0 || diagNowMs - lastRtcDiagMs >= 5000UL) {
+      lastRtcDiagMs = diagNowMs;
+      rtcDiagnosticDump("CLOCK NOT READY - live diagnostic");
+    }
     return;
   }
 
@@ -1984,6 +2497,17 @@ static void rs485ClockSendTick() {
   ++rsTxSeq;
 #endif
 }
+static void rs485FeedbackPoll() {
+#if PANEL_ID == 1
+  TimeFrame ignored{};
+  // rsReadFrame() also handles every 4-byte BedBox feedback frame it sees.
+  // Any complete A5 frame left over here is simply drained; the synchronous
+  // TIME send already waited for its matching ACK before we get here.
+  while (rsReadFrame(ignored)) {
+    // No action required for late/stale A5 frames on Shemi.
+  }
+#endif
+}
 static void rs485ClockPoll() {
 #if PANEL_ID == 2
   TimeFrame rx{};
@@ -1995,6 +2519,17 @@ static void rs485ClockPoll() {
       continue;
     }
 
+    if (rsDispatchBedboxReply(rx)) continue;
+    if (rsDispatchAcReply(rx)) continue;
+
+    if (rx.src == NODE_SHEMI && rx.dst == NODE_IRA && rx.type == 0x22) {
+      delay(2);
+      servicePanelAudio();
+      TimeFrame done = rx;
+      done.src = NODE_IRA; done.dst = NODE_SHEMI; done.type = 0x23;
+      done.crc = rsFrameCrc(done); rsSendFrame(done);
+      continue;
+    }
     if (rx.dst != NODE_IRA && rx.dst != 0) continue;
     if (rx.src != NODE_SHEMI || rx.type != TYPE_TIME) continue;
 
@@ -2036,6 +2571,11 @@ static void rs485ClockPoll() {
 }
 
 static void rtcRead() {
+  static bool rtcBootDumpDone = false;
+  if (!rtcBootDumpDone) {
+    rtcBootDumpDone = true;
+    rtcDiagnosticDump("first rtcRead after boot");
+  }
 #if PANEL_ID == 2
   return;  // Ira clock comes from Shemi over RS485.
 #endif
@@ -2168,7 +2708,7 @@ static bool cfgSave() {
   b[1] = EE_MAGIC1;
   b[2] = EE_VERSION;
   b[3] = (uint8_t)((autoBright ? 0x01 : 0) | (alarmOn   ? 0x02 : 0) |
-                   (use12h     ? 0x04 : 0) | (alarmOnce ? 0x08 : 0));
+                   (use12h     ? 0x04 : 0) | (alarmOnce ? 0x08 : 0) | 0x10);
   b[4] = blMin;
   b[5] = blMax;
   b[6] = autoSpeed;
@@ -2236,7 +2776,7 @@ static void cfgLoad() {
   alarmOn    = (b[3] & 0x02) != 0;
   // Bit 2 was always zero before TEST 028, so an older record reads
   // as 24 hour - which is what it was. No version bump needed.
-  use12h     = (b[3] & 0x04) != 0;
+  use12h     = true;   // TEST073: display is always 12-hour AM/PM
   alarmOnce  = (b[3] & 0x08) != 0;   // 0 = every day, as older records meant
   blMin      = b[4];
   blMax      = b[5];
@@ -2250,7 +2790,15 @@ static void cfgLoad() {
     // Written before TEST 039. Translate the old five entry index
     // rather than throw the setting away.
     uint8_t old = b[12] & 0x0F;
-    saverIdx = (old <= 4) ? kSaverLegacy[old] : 5;
+    saverIdx = (old <= 4) ? kSaverLegacy[old] : 2;
+  }
+  // Bit 4 marks the one-time default migration. Old records cannot tell
+  // a factory five-minute default from an explicitly chosen five minutes.
+  // Other saved delays are retained; five minutes selected after this
+  // upgrade is retained too because every new record carries this bit.
+  if (!(b[3] & 0x10)) {
+    if (saverIdx == 5) saverIdx = 2;
+    cfgTouched();
   }
   saverAfterMs = kSaverOpts[saverIdx];
 
@@ -2428,7 +2976,10 @@ struct Tile {
   lv_obj_t *img;
   bool     *state;
 };
-static Tile  tiles[8];
+static Tile  tiles[10];
+static bool wallLampOn[2] = {false, false};
+static lv_obj_t *wallLampImg[2] = {}, *wallLampScreen[2] = {}, *wallLampSwitch[2] = {};
+static lv_obj_t *radioPowerDot = nullptr;
 static int   tileCount = 0;
 
 // Panel-side state. Nothing reports back yet, so this is the only
@@ -2441,7 +2992,7 @@ static bool shadeOpen   = true;
 static bool lampOn      = false;
 static bool fanOn       = false;
 static int  fanSpeed    = 0;
-// What the short press returns to. 2 is the middle speed, used only
+// What the fan screen ON switch returns to. 2 is the middle speed, used only
 // if the fan has never been set this session.
 static int  lastFanSpeed = 0;
 
@@ -2454,10 +3005,15 @@ static void refreshHomeTiles();
 static void refreshAC();
 static void refreshFan();
 static void buildSettings();
+static void buildDreams();
 static void buildMassage();
 static void buildRadio();
 static void buildAC();
 static void buildFan();
+static void buildLamp();
+static void ambientOpen();
+static void ambientRadioControlBuild(lv_obj_t *parent);
+static void buildShade();
 static void buildAlarm();
 static void lvMem(const char *what);
 static void autoBrightTick();
@@ -2471,6 +3027,11 @@ static void cfgTick();
 static void alarmTick();
 static void refreshAlarm();
 static void sensorTick(lv_timer_t *t);
+static void accessibilityPrepare(lv_obj_t *screen);
+static void evScreenAccessibility(lv_event_t *e);
+static void persistentStatusBuild();
+static void persistentStatusTick();
+static void deviceAnimationTick();
 
 static void say(const char *what) {
   Serial.printf("[tile] %s\n", what);
@@ -2488,103 +3049,106 @@ static void repaintOwner(lv_obj_t *img) {
     if (tiles[i].img == img) { paintTile(tiles[i]); return; }
 }
 
+// Home navigation: tap or hold. Use elapsed time during PRESSING, not RELEASED
+// or the input driver's configurable long-press threshold.
+static const uint32_t HOME_HOLD_OPEN_MS = 1000;
+enum HomeAction { HOME_NONE, HOME_TOGGLE, HOME_OPEN };
+static void homeTogglePower(uint8_t device);
+static struct {
+  lv_obj_t *target = nullptr;
+  uint32_t started = 0;
+  bool opened = false;
+} homeNavigationPress;
+
+static HomeAction homeNavigationReady(lv_event_t *e) {
+  lv_obj_t *target = lv_event_get_target(e);
+  lv_event_code_t code = lv_event_get_code(e);
+  if (code == LV_EVENT_PRESS_LOST || code == LV_EVENT_DELETE) {
+    if (homeNavigationPress.target == target) homeNavigationPress.target = nullptr;
+    return HOME_NONE;
+  }
+  if (lv_scr_act() != scrHome) return HOME_NONE;
+  if (code == LV_EVENT_PRESSED) {
+    homeNavigationPress.target = target;
+    homeNavigationPress.started = lv_tick_get();
+    homeNavigationPress.opened = false;
+    return HOME_NONE;
+  }
+  if (homeNavigationPress.target != target || homeNavigationPress.opened) return HOME_NONE;
+  if (code == LV_EVENT_PRESSING) {
+    if (lv_tick_elaps(homeNavigationPress.started) < HOME_HOLD_OPEN_MS) return HOME_NONE;
+    homeNavigationPress.opened = true;
+    // Consume the rest of this gesture before loading a screen underneath it.
+    // The user may keep holding or move the finger; no new control receives it.
+    lv_indev_t *input = lv_indev_get_act();
+    if (input) lv_indev_wait_release(input);
+    return HOME_OPEN;
+  }
+  if (code == LV_EVENT_CLICKED) {
+    homeNavigationPress.opened = true;
+    return HOME_TOGGLE; // short release acts once; hold never reaches this action
+  }
+  return HOME_NONE;
+}
+
+// Short tap changes power; a completed hold navigates without changing power.
 static void evBed(lv_event_t *e) {
-  if (!scrMassage) { buildMassage(); lvMem("massage"); }          // built the first time it is opened
-  if (scrMassage) lv_scr_load(scrMassage); else say("massage screen failed to build");
+  HomeAction action = homeNavigationReady(e);
+  if (action == HOME_NONE) return;
+  if (action == HOME_TOGGLE) { homeTogglePower(0); return; }
+  if (!scrMassage) { buildMassage(); lvMem("massage"); }
+  if (scrMassage) lv_scr_load(scrMassage);
 }
-
 static void evRadio(lv_event_t *e) {
-  if (!scrRadio) { buildRadio(); lvMem("radio"); }          // built the first time it is opened
-  if (scrRadio) lv_scr_load(scrRadio); else say("radio screen failed to build");
+  HomeAction action = homeNavigationReady(e);
+  if (action == HOME_NONE) return;
+  if (action == HOME_TOGGLE) { homeTogglePower(1); return; }
+  if (!scrRadio) { buildRadio(); lvMem("radio"); }
+  if (scrRadio) lv_scr_load(scrRadio);
 }
-
-// Fan and AC tiles: a short press flips the power and stays here, a
-// 2 second hold opens the detail screen.
-//
-// THE HOLD IS TIMED HERE. LV_EVENT_LONG_PRESSED depends on the
-// input driver's long_press_time, which lives inside Waveshare's
-// port; TEST 046 set it blind at boot and the long press never
-// fired. millis() on press and on release is exact and depends on
-// nothing.
-#define TILE_HOLD_MS 2000
-
-static uint32_t tilePressMs = 0;
-
-static void evTilePress(lv_event_t *e) { tilePressMs = millis(); }
-
-// True if this was a hold. Also prints the measured time, so a
-// threshold that turns out wrong can be changed against real
-// numbers instead of guesses.
-static bool tileWasHeld(const char *what) {
-  uint32_t held = millis() - tilePressMs;
-  Serial.printf("[tile] %s held %lu ms\n", what, (unsigned long)held);
-  Serial.flush();
-  return (tilePressMs != 0) && (held >= TILE_HOLD_MS);
-}
-
 static void evACRelease(lv_event_t *e) {
-  bool hold = tileWasHeld("AC");
-  tilePressMs = 0;
-  if (hold) {
-    if (!scrAC) { buildAC(); lvMem("AC"); }
-    if (scrAC) lv_scr_load(scrAC); else say("AC screen failed to build");
-    return;
-  }
-  acPower = !acPower;
-  refreshAC();
-  refreshHomeTiles();
-  say(acPower ? "AC on" : "AC off");
+  HomeAction action = homeNavigationReady(e);
+  if (action == HOME_NONE) return;
+  if (action == HOME_TOGGLE) { homeTogglePower(2); return; }
+  if (!scrAC) { buildAC(); lvMem("AC"); }
+  if (scrAC) lv_scr_load(scrAC); else say("AC screen failed to build");
 }
-
-// Slide off the tile and nothing happens - the standard way out of
-// a press you did not mean.
-static void evTileLost(lv_event_t *e) { tilePressMs = 0; }
-
-static void evShade(lv_event_t *e) {
-  shadeOpen = !shadeOpen;
-  lv_img_set_src(tileShadeImg, shadeOpen ? &img_shade_open : &img_shade_closed);
-  repaintOwner(tileShadeImg);
-  say(shadeOpen ? "shutters open" : "shutters closed");
-}
-
-static void evLamp(lv_event_t *e) {
-  lampOn = !lampOn;
-  // The lamp has one photograph and two colours, applied once on
-  // press. Nothing repaints on a timer - that was the old jitter.
-  // The lamp is tinted rather than blackened - amber when lit, cold
-  // grey when not - so it needs its own recolour, then the shared
-  // opacity and background rule on top.
-  lv_obj_set_style_img_recolor(tileLampImg,
-      lv_color_hex(lampOn ? 0xE8A030 : 0x9098A0), 0);
-  repaintOwner(tileLampImg);
-  say(lampOn ? "lamp on" : "lamp off");
-}
-
 static void evFanRelease(lv_event_t *e) {
-  bool hold = tileWasHeld("fan");
-  tilePressMs = 0;
-  if (hold) {
-    if (!scrFan) { buildFan(); lvMem("fan"); }
-    if (scrFan) lv_scr_load(scrFan); else say("fan screen failed to build");
-    return;
-  }
-  if (fanSpeed > 0) { lastFanSpeed = fanSpeed; fanSpeed = 0; }
-  else              { fanSpeed = (lastFanSpeed > 0) ? lastFanSpeed : 2; }
-  fanOn = (fanSpeed > 0);
-  refreshFan();
-  refreshHomeTiles();
-  say(fanOn ? "fan on" : "fan off");
+  HomeAction action = homeNavigationReady(e);
+  if (action == HOME_NONE) return;
+  if (action == HOME_TOGGLE) { homeTogglePower(3); return; }
+  if (!scrFan) { buildFan(); lvMem("fan"); }
+  if (scrFan) lv_scr_load(scrFan); else say("fan screen failed to build");
 }
-
-// evFanLong went with the LVGL long-press approach; evFanRelease
-// above does the same job from its own timing.
-
+static void evLamp(lv_event_t *e) {
+  HomeAction action = homeNavigationReady(e);
+  if (action == HOME_NONE) return;
+  if (action == HOME_TOGGLE) { homeTogglePower(4); return; }
+  ambientOpen();
+}
+static void evShade(lv_event_t *e) {
+  HomeAction action = homeNavigationReady(e);
+  if (action == HOME_NONE) return;
+  if (action == HOME_TOGGLE) { homeTogglePower(5); return; }
+  if (!scrShade) { buildShade(); lvMem("shutters"); }
+  if (scrShade) lv_scr_load(scrShade);
+}
+static void evDreams(lv_event_t *e) {
+  if (!homeNavigationReady(e)) return;
+  if (!scrDreams) { buildDreams(); lvMem("dreams"); }
+  if (scrDreams) lv_scr_load(scrDreams);
+  else say("Dreams screen failed to build");
+}
 static void evSettings(lv_event_t *e) {
+  if (!homeNavigationReady(e)) return;
   if (!scrSettings) { buildSettings(); lvMem("settings"); }
   if (scrSettings) lv_scr_load(scrSettings);
-  else             say("settings screen failed to build");
+  else say("settings screen failed to build");
 }
 static void evSpare(lv_event_t *e) {
+  HomeAction action = homeNavigationReady(e);
+  if (action == HOME_NONE) return;
+  if (action == HOME_TOGGLE) { homeTogglePower(6); return; }
   if (!scrAlarm) { buildAlarm(); lvMem("alarm"); }
   if (scrAlarm) lv_scr_load(scrAlarm); else say("alarm screen failed to build");
 }
@@ -2592,7 +3156,7 @@ static void evSpare(lv_event_t *e) {
 // ------------------------------------------------------------
 
 static int tileX(int c) { return TILE_X0 + c * (TILE_SZ + TILE_GAPX); }
-static int tileY(int r) { return TILE_Y0 + r * (TILE_SZ + TILE_GAPY); }
+static int tileY(int r) { return TILE_Y0 + r * (TILE_H + TILE_GAPY); }
 
 // ------------------------------------------------------------
 // TOUCH FEEDBACK
@@ -2659,17 +3223,160 @@ static void evAnyPress(lv_event_t *e) {
   hapticPulse();
 }
 
+// Enlarged touch regions are resolved by distance to the visible control.
+// Neighbouring regions meet at their midpoint, so a near miss cannot activate
+// two controls. Sliders accept the entire track plus its surrounding halo.
+static const int TOUCH_HALO = 24;
+struct TouchTarget { lv_obj_t *obj; lv_area_t area; };
+static TouchTarget touchTargets[192];
+static uint16_t touchTargetCount = 0;
+static lv_obj_t *touchScreen = nullptr;
+
+static int touchDistanceSquared(const lv_area_t &a, const lv_point_t &p) {
+  int dx = p.x < a.x1 ? a.x1-p.x : p.x > a.x2 ? p.x-a.x2 : 0;
+  int dy = p.y < a.y1 ? a.y1-p.y : p.y > a.y2 ? p.y-a.y2 : 0;
+  return dx*dx + dy*dy;
+}
+static void evAccessibleHit(lv_event_t *e) {
+  lv_hit_test_info_t *hit = (lv_hit_test_info_t *)lv_event_get_param(e);
+  lv_obj_t *target = lv_event_get_target(e);
+  int winner = -1, best = 0x7fffffff;
+  for (uint16_t i=0; i<touchTargetCount; ++i) {
+    const lv_area_t &a = touchTargets[i].area;
+    const lv_point_t &p = *hit->point;
+    if (p.x < a.x1-TOUCH_HALO || p.x > a.x2+TOUCH_HALO ||
+        p.y < a.y1-TOUCH_HALO || p.y > a.y2+TOUCH_HALO) continue;
+    int distance = touchDistanceSquared(a, p);
+    if (distance < best) { best = distance; winner = i; }
+  }
+  hit->res = winner >= 0 && touchTargets[winner].obj == target;
+}
+static void evAccessibleActivity(lv_event_t *e) {
+  // Do not emit another haptic pulse: the existing screen handler does that.
+  lastTouchMs = millis();
+}
+static bool isAccessibleControl(lv_obj_t *obj) {
+  return lv_obj_has_flag(obj, LV_OBJ_FLAG_CLICKABLE) &&
+         (lv_obj_check_type(obj, &lv_btn_class) ||
+          lv_obj_check_type(obj, &lv_slider_class) ||
+          lv_obj_has_class(obj, &lv_btnmatrix_class) ||
+          lv_obj_check_type(obj, &lv_img_class) ||
+          lv_obj_check_type(obj, &lv_textarea_class));
+}
+static void collectTouchTargets(lv_obj_t *obj) {
+  if (!lv_obj_is_visible(obj)) return;
+  if (isAccessibleControl(obj) && touchTargetCount < 192) {
+    TouchTarget &slot = touchTargets[touchTargetCount++];
+    slot.obj = obj;
+    lv_obj_get_coords(obj, &slot.area);
+    lv_obj_set_ext_click_area(obj, TOUCH_HALO);
+    lv_obj_add_flag(obj, LV_OBJ_FLAG_ADV_HITTEST);
+    if (!lv_obj_has_flag(obj, LV_OBJ_FLAG_USER_1)) {
+      lv_obj_add_flag(obj, LV_OBJ_FLAG_USER_1);
+      lv_obj_add_event_cb(obj, evAccessibleHit, LV_EVENT_HIT_TEST, nullptr);
+      lv_obj_add_event_cb(obj, evAccessibleActivity, LV_EVENT_PRESSED, nullptr);
+      lv_obj_add_event_cb(obj, evAccessibleActivity, LV_EVENT_PRESSING, nullptr);
+    }
+    // Button labels/knobs never compete with the control they belong to.
+    return;
+  }
+  uint32_t children = lv_obj_get_child_cnt(obj);
+  for (uint32_t i=0; i<children; ++i) collectTouchTargets(lv_obj_get_child(obj, i));
+}
+static void accessibilityPrepare(lv_obj_t *screen) {
+  if (!screen || screen == scrSaver) return;
+  touchScreen = screen;
+  touchTargetCount = 0;
+  lv_obj_update_layout(screen);
+  collectTouchTargets(screen);
+}
+static void evScreenAccessibility(lv_event_t *e) {
+  accessibilityPrepare(lv_event_get_target(e));
+}
+static void accessibilityTick() {
+  static uint32_t lastScan = 0;
+  lv_obj_t *active = lv_scr_act();
+  // This only recalculates hit geometry, never redraws the screen. It also
+  // catches settings tabs, search results and lazy radio pages changing.
+  if (active != scrSaver && (active != touchScreen || millis()-lastScan >= 500)) {
+    lastScan = millis();
+    accessibilityPrepare(active);
+  }
+  // LVGL updates inactivity on every held pointer sample, even if a child
+  // swallowed the event; this also covers drags through empty space.
+  if (lv_disp_get_inactive_time(nullptr) < 150) lastTouchMs = millis();
+}
+
+// One compact top-layer readout is used on normal pages. The analog saver
+// has its own matching corner readouts and hides this strip before drawing.
+// Every part is non-clickable, so it never masks controls or wake touches.
+static lv_obj_t *persistentStatus = nullptr, *persistentTime = nullptr;
+static lv_obj_t *persistentTemp = nullptr;
+static void persistentStatusSetVisible(bool visible) {
+  if (!persistentStatus) return;
+  if (visible) lv_obj_clear_flag(persistentStatus, LV_OBJ_FLAG_HIDDEN);
+  else         lv_obj_add_flag(persistentStatus, LV_OBJ_FLAG_HIDDEN);
+}
+static void persistentStatusTick() {
+  if (!persistentStatus) return;
+  char timeText[24], tempText[24];
+  if (now.valid && !now.wasStopped) {
+    if (use12h) {
+      const char *suffix;
+      uint8_t hour = to12(now.hour, &suffix);
+      snprintf(timeText, sizeof(timeText), "%u:%02u %s", hour, now.min, suffix);
+    } else snprintf(timeText, sizeof(timeText), "%02u:%02u", now.hour, now.min);
+  } else snprintf(timeText, sizeof(timeText), "--:--");
+  if (shtOK) snprintf(tempText, sizeof(tempText), "%.1f\xC2\xB0" "C", shtTempC);
+  else snprintf(tempText, sizeof(tempText), "--\xC2\xB0" "C");
+  if (strcmp(lv_label_get_text(persistentTime), timeText)) lv_label_set_text(persistentTime, timeText);
+  if (strcmp(lv_label_get_text(persistentTemp), tempText)) lv_label_set_text(persistentTemp, tempText);
+}
+static void persistentStatusBuild() {
+  if (persistentStatus) return;
+  persistentStatus = lv_obj_create(lv_layer_top());
+  lv_obj_remove_style_all(persistentStatus);
+  lv_obj_set_size(persistentStatus, 318, 46);
+  lv_obj_align(persistentStatus, LV_ALIGN_TOP_RIGHT, -12, 8);
+  lv_obj_clear_flag(persistentStatus, LV_OBJ_FLAG_CLICKABLE | LV_OBJ_FLAG_SCROLLABLE);
+  persistentTime = lv_label_create(persistentStatus);
+  lv_obj_set_style_text_font(persistentTime, &lv_font_montserrat_26, 0);
+  lv_obj_set_style_text_color(persistentTime, lv_color_hex(0xA9BC96), 0);
+  lv_obj_align(persistentTime, LV_ALIGN_LEFT_MID, 0, 0);
+  persistentTemp = lv_label_create(persistentStatus);
+  lv_obj_set_style_text_font(persistentTemp, &lv_font_montserrat_26, 0);
+  lv_obj_set_style_text_color(persistentTemp, lv_color_hex(0xA9BC96), 0);
+  lv_obj_align(persistentTemp, LV_ALIGN_RIGHT_MID, -30, 0);
+  lv_obj_t *stem = lv_obj_create(persistentStatus);
+  lv_obj_remove_style_all(stem);
+  lv_obj_set_size(stem, 9, 24);
+  lv_obj_set_style_radius(stem, 5, 0);
+  lv_obj_set_style_border_width(stem, 2, 0);
+  lv_obj_set_style_border_color(stem, lv_color_hex(0xA9BC96), 0);
+  lv_obj_align(stem, LV_ALIGN_TOP_RIGHT, -8, 6);
+  lv_obj_clear_flag(stem, LV_OBJ_FLAG_CLICKABLE | LV_OBJ_FLAG_SCROLLABLE);
+  lv_obj_t *bulb = lv_obj_create(persistentStatus);
+  lv_obj_remove_style_all(bulb);
+  lv_obj_set_size(bulb, 17, 17);
+  lv_obj_set_style_radius(bulb, LV_RADIUS_CIRCLE, 0);
+  lv_obj_set_style_bg_opa(bulb, LV_OPA_COVER, 0);
+  lv_obj_set_style_bg_color(bulb, lv_color_hex(0xA9BC96), 0);
+  lv_obj_align(bulb, LV_ALIGN_TOP_RIGHT, -4, 25);
+  lv_obj_clear_flag(bulb, LV_OBJ_FLAG_CLICKABLE | LV_OBJ_FLAG_SCROLLABLE);
+  persistentStatusTick();
+}
+
 // ------------------------------------------------------------
 
 static lv_obj_t *makeTile(int col, int row, uint32_t bg) {
   lv_obj_t *b = lv_btn_create(scrHome);
-  lv_obj_set_size(b, TILE_SZ, TILE_SZ);
+  lv_obj_set_size(b, TILE_SZ, TILE_H);
   lv_obj_set_pos(b, tileX(col), tileY(row));
   lv_obj_set_style_bg_color(b, lv_color_hex(bg), 0);
   lv_obj_set_style_radius(b, 16, 0);
   lv_obj_set_style_pad_all(b, 0, 0);
   lv_obj_set_style_shadow_width(b, 0, 0);
-  lv_obj_clear_flag(b, LV_OBJ_FLAG_SCROLLABLE);
+  lv_obj_clear_flag(b, LV_OBJ_FLAG_SCROLLABLE | LV_OBJ_FLAG_PRESS_LOCK);
   lv_obj_add_flag(b, LV_OBJ_FLAG_EVENT_BUBBLE);   // press reaches scrHome
   return b;
 }
@@ -2687,7 +3394,10 @@ static lv_obj_t *addImg(lv_obj_t *parent, const lv_img_dsc_t *src) {
 // the panel behind it move together.
 static void paintTile(const struct Tile &t) {
   bool on = t.state ? *t.state : false;
-  lv_obj_set_style_img_recolor_opa(t.img, on ? dimOn : dimOff, 0);
+  // Distinct supplied on/off artwork stays readable; main lamp OFF is deliberately dark.
+  uint8_t dim = on ? dimOn : dimOff;
+  if (t.img == tileLampImg && !on && dim < 205) dim = 205;
+  lv_obj_set_style_img_recolor_opa(t.img, dim, 0);
   lv_obj_set_style_bg_color(t.btn,
       lv_color_hex(on ? TILE_BG_ON : TILE_BG_OFF), 0);
 }
@@ -2728,49 +3438,30 @@ static void sensorTick(lv_timer_t *t) {
   // luxRead and autoBrightTick moved to their own 100 ms timer -
   // once a second is far too coarse to follow a room.
   alarmTick();
+  persistentStatusTick();
   saverTick();
   sleepTick();
   massTick();
   cfgTick();
 
+  if (rsBedTestActiveUntil &&
+      (int32_t)(rsBedTestActiveUntil - millis()) <= 0) {
+    rsBedTestActiveUntil = 0;
+    rsSetBedStatus("IRA BedBox: motor test finished, ALL OFF");
+  }
+  if (lblBedLink && strcmp(lv_label_get_text(lblBedLink), rsBedStatus))
+    lv_label_set_text(lblBedLink, rsBedStatus);
+  if (lblAcLink) {
+    if (rsAcStatusUntil && (int32_t)(rsAcStatusUntil - millis()) <= 0) {
+      rsAcStatusUntil = 0;
+      snprintf(rsAcStatus, sizeof(rsAcStatus), "AC IR: ready");
+    }
+    if (strcmp(lv_label_get_text(lblAcLink), rsAcStatus))
+      lv_label_set_text(lblAcLink, rsAcStatus);
+  }
+
   if (sweepWanted)     { sweepWanted = false; i2cScanNow(true);  }
   else if (scanWanted) { scanWanted  = false; i2cScanNow(false); }
-
-  char c[48];
-  if (now.valid && !now.wasStopped) {
-    if (use12h) {
-      const char *sfx;
-      uint8_t h12 = to12(now.hour, &sfx);
-      snprintf(c, sizeof(c), "%u:%02u %s   %s %02u/%02u/%02u",
-               h12, now.min, sfx,
-               kDow[now.dow <= 7 ? now.dow : 0], now.day, now.month,
-               (unsigned)(now.year % 100));
-    } else {
-      snprintf(c, sizeof(c), "%02u:%02u   %s %02u/%02u/%02u",
-               now.hour, now.min,
-               kDow[now.dow <= 7 ? now.dow : 0], now.day, now.month,
-               (unsigned)(now.year % 100));
-    }
-  } else if (now.valid) {
-    snprintf(c, sizeof(c), "CLOCK NOT SET");
-  } else {
-    snprintf(c, sizeof(c), "NO RTC");
-  }
-  if (lblClock) {
-    lv_label_set_text(lblClock, c);
-    lv_obj_set_style_text_color(lblClock,
-        lv_color_hex((now.valid && !now.wasStopped) ? 0xFFFFFF : 0xD05050), 0);
-  }
-
-  // \xC2\xB0 is the degree sign. Verified present: the built-in
-  // montserrat fonts here are built with -r 0x20-0x7F,0xB0.
-  char m[64];
-  int o = 0;
-  if (shtOK) o += snprintf(m + o, sizeof(m) - o,
-                           "%.1f \xC2\xB0" "C   %.0f %%RH", shtTempC, shtRH);
-  else       o += snprintf(m + o, sizeof(m) - o, "-- \xC2\xB0" "C   -- %%RH");
-  if (luxOK) snprintf(m + o, sizeof(m) - o, "   %.0f lx", luxVal);
-  if (lblClimate) lv_label_set_text(lblClimate, m);
 
   // The settings screen is built once and kept, so these exist even
   // while the home screen is showing. Updating them costs two label
@@ -2780,12 +3471,12 @@ static void sensorTick(lv_timer_t *t) {
       if (use12h) {
         const char *sfx;
         uint8_t h12 = to12(now.hour, &sfx);
-        lv_label_set_text_fmt(lblNowTime, "now  %u:%02u %s", h12, now.min, sfx);
+        lv_label_set_text_fmt(lblNowTime, "%02u:%02u %s", h12, now.min, sfx);
       } else {
-        lv_label_set_text_fmt(lblNowTime, "now  %02u:%02u", now.hour, now.min);
+        lv_label_set_text_fmt(lblNowTime, "%02u:%02u", now.hour, now.min);
       }
     else
-      lv_label_set_text(lblNowTime, "clock not set");
+      lv_label_set_text(lblNowTime, "ןווכמ אל ןועשה");
   }
   if (lblLuxLive) {
     // NOT lv_label_set_text_fmt: LVGL's printf has
@@ -2831,7 +3522,7 @@ static void sensorTick(lv_timer_t *t) {
 //
 // Ported from buildSettings() in TEST 081, with three forced
 // changes:
-//   fonts - 26 is the largest this lv_conf.h builds
+//   Original fonts were limited to 26; selected layout 3 uses subset regular fonts.
 //   24 hour - one representation, no AM/PM conversion
 //   1024x600 - every coordinate from the 800x480 original moves
 // ============================================================
@@ -2857,7 +3548,7 @@ static lv_obj_t *lblBlVal = NULL;                 // brightness in use now
 static lv_obj_t *sldBlMin = NULL, *lblBlMin = NULL;
 static lv_obj_t *sldBlMax = NULL, *lblBlMax = NULL;
 static lv_obj_t *swAuto   = NULL;
-static lv_obj_t *sw12h    = NULL;
+static lv_obj_t *btnAM    = NULL, *btnPM = NULL;
 static lv_obj_t *sldSpeed = NULL, *lblAutoSpeed = NULL;
 static lv_obj_t *sldSaverAfter = NULL, *lblSaverAfter = NULL;
 static lv_obj_t *sldSaverBright = NULL, *lblSaverBright = NULL;
@@ -2881,60 +3572,148 @@ static void refreshSetLabels() {
     if (use12h) {
       const char *sfx;
       uint8_t h12 = to12(setH, &sfx);
-      lv_label_set_text_fmt(lblSetH, "%u %s", h12, sfx);
+      lv_label_set_text_fmt(lblSetH, "%02u", h12);
     } else {
       lv_label_set_text_fmt(lblSetH, "%02u", setH);
     }
   }
   if (lblSetMi) lv_label_set_text_fmt(lblSetMi, "%02u", setMi);
-  if (lblSetD)  lv_label_set_text_fmt(lblSetD,  "%u",   setD);
-  if (lblSetMo) lv_label_set_text_fmt(lblSetMo, "%u",   setMo);
+  if (lblSetD)  lv_label_set_text_fmt(lblSetD,  "%02u", setD);
+  static const char *months[12] = { "Jan", "Feb", "Mar", "Apr", "May", "Jun",
+                                    "Jul", "Aug", "Sep", "Oct", "Nov", "Dec" };
+  if (lblSetMo) lv_label_set_text(lblSetMo, months[setMo - 1]);
   if (lblSetY)  lv_label_set_text_fmt(lblSetY,  "%u",   setY);
 }
 
 // Pull the fields from the chip. Called on every entry to the
 // screen, not once at boot - otherwise a later visit shows stale
 // numbers and Set would move a correct clock backwards.
+static void refreshAmPmButtons();
+
 static void seedFromRTC() {
   if (now.valid && !now.wasStopped) {
     setH = now.hour; setMi = now.min;
     setD = now.day;  setMo = now.month; setY = now.year;
   }
   refreshSetLabels();
-  if (lblSetStatus) lv_label_set_text(lblSetStatus, "");
+  refreshAmPmButtons();
+  if (lblSetStatus) {
+#if PANEL_ID == 2
+    lv_label_set_text(lblSetStatus, "ימש לש לנאפב ןועשה ןוויכ");
+    lv_obj_set_style_text_color(lblSetStatus, lv_color_hex(0xE0E6EE), 0);
+#else
+    lv_label_set_text(lblSetStatus, "");
+#endif
+  }
 }
 
-static void evSetHUp (lv_event_t *e) { setH  = (uint8_t)((setH + 1) % 24); refreshSetLabels(); }
-static void evSetHDn (lv_event_t *e) { setH  = (uint8_t)((setH + 23) % 24); refreshSetLabels(); }
-static void evSetMiUp(lv_event_t *e) { setMi = (uint8_t)((setMi + 1) % 60); refreshSetLabels(); }
-static void evSetMiDn(lv_event_t *e) { setMi = (uint8_t)((setMi + 59) % 60); refreshSetLabels(); }
-static void evSetDUp (lv_event_t *e) { setD  = (uint8_t)(setD  % daysInMonth(setMo, setY) + 1); refreshSetLabels(); }
-static void evSetDDn (lv_event_t *e) { setD  = (uint8_t)(setD <= 1 ? daysInMonth(setMo, setY) : setD - 1); refreshSetLabels(); }
-static void evSetMoUp(lv_event_t *e) { setMo = (uint8_t)(setMo % 12 + 1); refreshSetLabels(); }
-static void evSetMoDn(lv_event_t *e) { setMo = (uint8_t)(setMo <= 1 ? 12 : setMo - 1); refreshSetLabels(); }
+
+
+// A new edit is pending again; never leave a previous successful save visible.
+static void clockEditPending() {
+#if PANEL_ID == 1
+  if (lblSetStatus) lv_label_set_text(lblSetStatus, "");
+#endif
+}
+
+static void evSetHUp(lv_event_t *e) { clockEditPending();
+  (void)e;
+  const uint8_t base = (setH >= 12) ? 12 : 0;
+  uint8_t h = (uint8_t)(setH % 12);     // 0 means 12 on the face
+  h = (uint8_t)((h + 1) % 12);          // 12 -> 1, 11 -> 12
+  setH = (uint8_t)(base + h);
+  refreshSetLabels();
+  refreshAmPmButtons();
+}
+static void evSetHDn(lv_event_t *e) { clockEditPending();
+  (void)e;
+  const uint8_t base = (setH >= 12) ? 12 : 0;
+  uint8_t h = (uint8_t)(setH % 12);
+  h = (uint8_t)((h + 11) % 12);         // 1 -> 12, 12 -> 11
+  setH = (uint8_t)(base + h);
+  refreshSetLabels();
+  refreshAmPmButtons();
+}
+static void evSetMiUp(lv_event_t *e) { clockEditPending(); setMi = (uint8_t)((setMi + 1) % 60); refreshSetLabels(); }
+static void evSetMiDn(lv_event_t *e) { clockEditPending(); setMi = (uint8_t)((setMi + 59) % 60); refreshSetLabels(); }
+static void evSetDUp (lv_event_t *e) { clockEditPending(); setD  = (uint8_t)(setD  % daysInMonth(setMo, setY) + 1); refreshSetLabels(); }
+static void evSetDDn (lv_event_t *e) { clockEditPending(); setD  = (uint8_t)(setD <= 1 ? daysInMonth(setMo, setY) : setD - 1); refreshSetLabels(); }
+static void evSetMoUp(lv_event_t *e) { clockEditPending(); setMo = (uint8_t)(setMo % 12 + 1); refreshSetLabels(); }
+static void evSetMoDn(lv_event_t *e) { clockEditPending(); setMo = (uint8_t)(setMo <= 1 ? 12 : setMo - 1); refreshSetLabels(); }
 // 2000-2099: the DS3231 stores two digits plus a century bit this
 // driver does not use, so anything outside cannot round trip.
-static void evSetYUp (lv_event_t *e) { if (setY < 2099) setY++; refreshSetLabels(); }
-static void evSetYDn (lv_event_t *e) { if (setY > 2000) setY--; refreshSetLabels(); }
+static void evSetYUp (lv_event_t *e) { clockEditPending(); if (setY < 2099) setY++; refreshSetLabels(); }
+static void evSetYDn (lv_event_t *e) { clockEditPending(); if (setY > 2000) setY--; refreshSetLabels(); }
 
-static void ev12h(lv_event_t *e) {
-  use12h = lv_obj_has_state(lv_event_get_target(e), LV_STATE_CHECKED);
-  cfgTouched();
-  refreshSetLabels();
-  refreshAlarm();
-  Serial.printf("clock display: %s\n", use12h ? "12 hour" : "24 hour");
+static void refreshAmPmButtons() {
+  const bool pm = (setH >= 12);
+
+  if (btnAM) {
+    lv_obj_set_style_bg_color(btnAM,
+        lv_color_hex(pm ? 0x2A3040 : SET_GREEN), 0);
+    lv_obj_set_style_border_color(btnAM,
+        lv_color_hex(pm ? 0x4A5262 : 0x9BF0BE), 0);
+    lv_obj_set_style_border_width(btnAM, pm ? 1 : 3, 0);
+  }
+
+  if (btnPM) {
+    lv_obj_set_style_bg_color(btnPM,
+        lv_color_hex(pm ? SET_GREEN : 0x2A3040), 0);
+    lv_obj_set_style_border_color(btnPM,
+        lv_color_hex(pm ? 0x9BF0BE : 0x4A5262), 0);
+    lv_obj_set_style_border_width(btnPM, pm ? 3 : 1, 0);
+  }
 }
 
+static void evAM(lv_event_t *e) { clockEditPending();
+  (void)e;
+  setH = (uint8_t)(setH % 12);          // 12 PM -> 12 AM, 3 PM -> 3 AM
+  use12h = true;
+  refreshSetLabels();
+  refreshAmPmButtons();
+  refreshAlarm();
+  cfgTouched();
+  Serial.println("clock setter: AM");
+}
+
+static void evPM(lv_event_t *e) { clockEditPending();
+  (void)e;
+  setH = (uint8_t)((setH % 12) + 12);   // 12 AM -> 12 PM, 3 AM -> 3 PM
+  use12h = true;
+  refreshSetLabels();
+  refreshAmPmButtons();
+  refreshAlarm();
+  cfgTouched();
+  Serial.println("clock setter: PM");
+}
+
+static void evGoHome(lv_event_t *e);
+
 static void evDoSetTime(lv_event_t *e) {
+  (void)e;
+#if PANEL_ID == 2
+  // Ira receives Shemi's time. There is no implemented time-setting request
+  // to the master, so never write an unrelated local RTC from this screen.
+  if (lblSetStatus) {
+    lv_label_set_text(lblSetStatus, "ימש לש לנאפב ןועשה ןוויכ");
+    lv_obj_set_style_text_color(lblSetStatus, lv_color_hex(0xE0E6EE), 0);
+  }
+  Serial.println("clock Done: returning home; shared time is set on Shemi");
+  evGoHome(e);
+  return;
+#endif
   bool ok = rtcSet(setY, setMo, setD, setH, setMi, 0);
   if (lblSetStatus) {
-    lv_label_set_text(lblSetStatus, ok ? "clock set" : "write failed");
+    lv_label_set_text(lblSetStatus, ok ? "ורמשנ ךיראתהו העשה" : "הלשכנ הרימשה");
     lv_obj_set_style_text_color(lblSetStatus,
-        lv_color_hex(ok ? SET_GREEN : 0xD05050), 0);
+        lv_color_hex(ok ? 0x9BF0BE : 0xFF9D9D), 0);
   }
   Serial.printf("set from screen: %04u-%02u-%02u %02u:%02u  %s\n",
                 setY, setMo, setD, setH, setMi, ok ? "ok" : "FAILED");
-  if (ok) rtcRead();
+  if (ok) {
+    rtcRead();
+    evGoHome(e);
+  }
 }
 
 // With Auto on, Max is the top of the mapped range. With Auto off
@@ -3021,7 +3800,7 @@ static void evSettingsShown(lv_event_t *e) { seedFromRTC(); }
 static lv_obj_t *setBtn(lv_obj_t *parent, int w, int h, const char *txt,
                         lv_event_cb_t cb, uint32_t bg) {
   lv_obj_t *b = lv_btn_create(parent);
-  lv_obj_set_size(b, w, h);
+  lv_obj_set_size(b, w < 64 ? 64 : w, h < 64 ? 64 : h);
   lv_obj_set_style_bg_color(b, lv_color_hex(bg), 0);
   lv_obj_add_flag(b, LV_OBJ_FLAG_EVENT_BUBBLE);
   lv_obj_add_event_cb(b, cb, LV_EVENT_CLICKED, NULL);
@@ -3035,7 +3814,7 @@ static lv_obj_t *setBtn(lv_obj_t *parent, int w, int h, const char *txt,
 static lv_obj_t *setBtnU(lv_obj_t *parent, int w, int h, const char *txt,
                          lv_event_cb_t cb, uint32_t bg, int val) {
   lv_obj_t *b = lv_btn_create(parent);
-  lv_obj_set_size(b, w, h);
+  lv_obj_set_size(b, w < 64 ? 64 : w, h < 64 ? 64 : h);
   lv_obj_set_style_bg_color(b, lv_color_hex(bg), 0);
   lv_obj_set_style_radius(b, 10, 0);
   lv_obj_set_style_shadow_width(b, 0, 0);
@@ -3106,7 +3885,7 @@ static lv_obj_t *makeToggle(lv_obj_t *par, lv_event_cb_t cb, bool on) {
   if (on) lv_obj_add_state(b, LV_STATE_CHECKED);
   // The face updates first, then the caller's handler runs.
   lv_obj_add_event_cb(b, evToggleFace, LV_EVENT_VALUE_CHANGED, NULL);
-  lv_obj_add_event_cb(b, cb,           LV_EVENT_VALUE_CHANGED, NULL);
+  if (cb) lv_obj_add_event_cb(b, cb, LV_EVENT_VALUE_CHANGED, NULL);
   toggleFace(b);
   return b;
 }
@@ -3132,11 +3911,11 @@ static lv_obj_t *setBigLabel(lv_obj_t *parent, const char *txt) {
 // written to the fonts this lv_conf.h actually builds - 12, 14, 16
 // and 26.
 //
-// NOTHING HERE COMMANDS ANY HARDWARE YET. There is no RS-485 bus,
-// no bedbox firmware and no IR transmitter on this panel. Every
-// control moves a variable and prints to serial. They are real
-// interfaces waiting for a transport, not simulations pretending
-// to work.
+// Radio controls the shared AudioNode. Shemi massage uses its established
+// BedBox protocol. Ira massage now uses the same addressed A5 command path
+// as Shemi; AC/fan remain local UI controls.
+// Their small activity animations indicate the panel command state,
+// not measured motion or airflow.
 // ============================================================
 
 // THE HEBREW IS STORED BACK TO FRONT ON PURPOSE. LVGL has no
@@ -3146,7 +3925,7 @@ static lv_obj_t *setBigLabel(lv_obj_t *parent, const char *txt) {
 #define P_MAPAL     "\xD7\x9C\xD7\xA4\xD7\x9E"                          // ׳³ֲ׳³ג‚×׳³ֲ
 #define P_ALIYA     "\xD7\x94\xD7\x99\xD7\x99\xD7\x9C\xD7\xA2"          // ׳³ֲ¢׳³ֲ׳³ג„¢׳³ג„¢׳³ג€
 #define P_NADNEDA   "\xD7\x94\xD7\x93\xD7\xA0\xD7\x93\xD7\xA0"          // ׳³ֲ ׳³ג€׳³ֲ ׳³ג€׳³ג€
-#define P_MALE      "\xD7\x90\xD7\x9C\xD7\x9E"                          // ׳³ֲ׳³ֲ׳³ֲ
+#define P_HAKOL     "\xD7\x9C\xD7\x9B\xD7\x94"                          // ׳³ֲ׳³ֲ׳³ֲ
 #define P_ALACHSON  "\xD7\x9F\xD7\x95\xD7\xA1\xD7\x9B\xD7\x9C\xD7\x90"  // ׳³ֲ׳³ֲ׳³ג€÷׳³ֲ¡׳³ג€¢׳³ֲ
 #define P_TZAD      "\xD7\x93\xD7\xA6"                                  // ׳³ֲ¦׳³ג€
 #define P_SICHRUR   "\xD7\xA8\xD7\x95\xD7\xA8\xD7\x97\xD7\xA1"          // ׳³ֲ¡׳³ג€”׳³ֲ¨׳³ג€¢׳³ֲ¨
@@ -3157,7 +3936,7 @@ static lv_obj_t *setBigLabel(lv_obj_t *parent, const char *txt) {
 #define P_AKRAI     "\xD7\x99\xD7\x90\xD7\xA8\xD7\xA7\xD7\x90"          // ׳³ֲ׳³ֲ§׳³ֲ¨׳³ֲ׳³ג„¢
 #define M_OFF       "\xD7\x99\xD7\x95\xD7\x91\xD7\x9B"                  // ׳³ג€÷׳³ג„¢׳³ג€˜׳³ג€¢׳³ג„¢ (unused since TEST 044)
 
-// Zone names, from TEST 075 in the repo. Pre-reversed like every
+// Zone names, from historical TEST 075 in the repo. Pre-reversed like every
 // other Hebrew string here.
 #define Z_HEAD      "\xD7\xA9\xD7\x90\xD7\xA8"                          // ׳³ֲ¨׳³ֲ׳³ֲ©
 #define Z_UPPER     "\xD7\x9F\xD7\x95\xD7\x99\xD7\x9C\xD7\xA2 \xD7\x92\xD7\x91"   // ׳³ג€™׳³ג€˜ ׳³ֲ¢׳³ֲ׳³ג„¢׳³ג€¢׳³ֲ
@@ -3170,7 +3949,26 @@ static lv_obj_t *setBigLabel(lv_obj_t *parent, const char *txt) {
 
 static lv_obj_t *patTile[12];
 static lv_obj_t *sldZone[4];
+static lv_obj_t *lblZoneValue[4] = {NULL, NULL, NULL, NULL};
+static void handleBedboxLevelFeedback(uint8_t bedId, uint8_t cmd,
+                                      uint8_t zone, uint8_t level) {
+  if (cmd != 20) return;
+  if (bedId != PANEL_ID) return;
+  if (zone >= 4 || level > 100) return;
+
+  if (sldZone[zone]) {
+    // Programmatic set does not fire LV_EVENT_VALUE_CHANGED in LVGL,
+    // so this cannot echo another command back to the BedBox.
+    lv_slider_set_value(sldZone[zone], level, LV_ANIM_ON);
+    if (lblZoneValue[zone])
+      lv_label_set_text_fmt(lblZoneValue[zone], "%u%%", level);
+  }
+
+  Serial.printf("[BEDBOX FB] bed=%u zone=%u level=%u\n",
+                bedId, zone, level);
+}
 static int  massPattern = -1;
+static int lastMassPattern = 0;
 static int  massTimer   = 30;          // minutes chosen
 static uint32_t massEnd = 0;           // millis deadline, 0 = not running
 static lv_obj_t *lblMassMode = NULL, *lblMassTimer = NULL;
@@ -3179,7 +3977,7 @@ static lv_obj_t *sldMassTimer = NULL, *swMassage = NULL;
 // The twelve colours from TEST 041 lasted three tests - Shemi asked
 // for the quiet TEST 081 look back: dark tiles, the chosen one lit.
 static const char *kPatName[12] = {
-  P_MAPAL,    P_ALIYA,   P_NADNEDA, P_MALE,
+  P_MAPAL,    P_ALIYA,   P_NADNEDA, P_HAKOL,
   P_ALACHSON, P_TZAD,    P_SICHRUR, P_LISHA,
   P_DOFEK,    P_NESHIMA, P_GESHEM,  P_AKRAI
 };
@@ -3222,8 +4020,114 @@ static void updateTimerBadge(lv_obj_t *b, int32_t leftMs, bool blinkOn) {
   if (l) lv_label_set_text_fmt(l, "%ld min", (long)((leftMs + 59999) / 60000));
   lv_obj_set_style_bg_opa(b, blinkOn ? LV_OPA_COVER : LV_OPA_50, 0);
 }
-static int  radioVolume  = 10;
+static int  radioVolume  = 11;
 static int  radioStation = -1;
+static lv_obj_t *lblRadioState = nullptr;
+static lv_obj_t *sldRadioVolume = nullptr;
+static lv_obj_t *radioDial = nullptr;
+static uint8_t radioOwner = 0, radioRevision = 0;
+static uint8_t radioReportedState = 255;
+static lv_obj_t *radioBars[2][6] = {};
+static void buildRadioBars(lv_obj_t *parent, int index) {
+  for (int i=0; i<6; ++i) {
+    lv_obj_t *bar = lv_obj_create(parent);
+    radioBars[index][i] = bar;
+    lv_obj_remove_style_all(bar);
+    lv_obj_set_size(bar, 10, 6);
+    lv_obj_set_style_radius(bar, 2, 0);
+    lv_obj_set_style_bg_opa(bar, LV_OPA_COVER, 0);
+    lv_obj_clear_flag(bar, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_flag(bar, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_align(bar, LV_ALIGN_BOTTOM_MID, i*15-37, -18);
+  }
+}
+static void radioAnimationTick() {
+  static uint32_t lastStep = 0;
+  static uint8_t phase = 0;
+  if (millis() - lastStep < 400) return;
+  lastStep = millis(); phase = (phase+1)%6;
+  const uint8_t heights[6] = {6, 10, 16, 22, 16, 10};
+  if (radioPowerDot) lv_obj_set_style_bg_color(radioPowerDot, lv_color_hex(radioReportedState == 2 ? 0x56FF8B : 0x243429), 0);
+  for (int screen=0; screen<2; ++screen) {
+    lv_obj_t *expected = screen == 0 ? scrHome : scrRadio;
+    if (!expected || lv_scr_act() != expected) continue;
+    for (int i=0; i<6; ++i) {
+      lv_obj_t *bar = radioBars[screen][i];
+      if (!bar) continue;
+      if (radioReportedState != 2) { lv_obj_add_flag(bar, LV_OBJ_FLAG_HIDDEN); continue; }
+      lv_obj_clear_flag(bar, LV_OBJ_FLAG_HIDDEN);
+      lv_obj_set_height(bar, radioReportedState == 2 ? heights[(phase+i)%6] : 6);
+      lv_obj_set_style_bg_color(bar, lv_color_hex(radioReportedState == 2 ? 0x42D98B :
+                                radioReportedState == 1 ? 0xE6AD42 : 0xD85C5C), 0);
+      lv_obj_align(bar, LV_ALIGN_BOTTOM_MID, i*15-37, -18);
+    }
+  }
+}
+// Selected original-blade frames animate only the fan icon; no orbit rings.
+// These reflect requested UI state, not unimplemented physical fan/AC feedback.
+static lv_obj_t *deviceMotion[3] = {};
+static lv_obj_t *deviceMotionLine[3][3] = {};
+static lv_point_t deviceMotionPoints[3][3][5] = {};
+// The selected AC image already contains its blue airflow. Animate that
+// single image gently; never overlay the obsolete three-line airflow.
+static void deviceAnimationTick() {
+  if (lv_scr_act()!=scrHome) return;
+  static uint32_t lastStep=0; static uint8_t phase=0;
+  if (millis()-lastStep<160) return;
+  lastStep=millis(); phase=(phase+1)%home_fan_frame_count;
+  if(tileFanImg) lv_img_set_src(tileFanImg,fanOn?home_fan_frames[phase]:&home_fan_off);
+  if(tileACImg) lv_obj_set_style_img_opa(tileACImg,
+      acPower ? (lv_opa_t)(235 + (phase%4)*6) : LV_OPA_COVER, 0);
+}
+static const uint8_t RADIO_WIRE_ID[8] = {1, 2, 3, 4, 5, 6, 0, 7};
+static const char *radioStateText = "Stopped";
+static void refreshRadio();
+static void alarmRadioUi(bool on) {
+  radioOn = on;
+  sleepEnd = 0; // an old radio sleep timer must not silence a new alarm
+  if (on) { radioStation = 6; radioVolume = 11; }
+  if (sldRadioVolume) lv_slider_set_value(sldRadioVolume, radioVolume, LV_ANIM_OFF);
+  if (swRadio) {
+    if (on) lv_obj_add_state(swRadio, LV_STATE_CHECKED);
+    else lv_obj_clear_state(swRadio, LV_STATE_CHECKED);
+    toggleFace(swRadio);
+  }
+  radioStateText = on ? "Starting alarm radio..." : "Stopping...";
+  refreshRadio();
+}
+static void requestRadioPlayback() {
+  radioBrowserCancelSelection();
+  if (radioStation < 0) radioStation = 0;
+  bool ok = queueRadioAudio(radioOn ? 7 : 2, RADIO_WIRE_ID[radioStation], radioVolume);
+  radioStateText = !ok ? "Command queue unavailable" : radioOn ? "Request sent..." : "Stopping...";
+  refreshRadio();
+}
+static void applyAudioReply() {
+  AudioReply reply;
+  if (!audioReplyQueue || xQueueReceive(audioReplyQueue, &reply, 0) != pdTRUE) return;
+  radioReportedState = reply.result == 0 ? reply.state : 255;
+  if (reply.result == 255) radioStateText = "AudioNode not responding";
+  else if (reply.result == 1) radioStateText = "AudioNode has no network";
+  else if (reply.result != 0) radioStateText = "Audio command rejected";
+  else if (reply.state == 3) radioStateText = "Station connection failed";
+  else if (reply.state == 2) radioStateText = "Player running";
+  else if (reply.state == 1) radioStateText = "Connecting / buffering...";
+  else radioStateText = "Stopped";
+  if (reply.result == 0) {
+    bool wasOn = radioOn;
+    if (reply.owner != PANEL_ID && (reply.owner != radioOwner || reply.revision != radioRevision))
+      sleepEnd = 0; // an old local sleep timer cannot silence the other panel's newer selection
+    radioOwner = reply.owner; radioRevision = reply.revision;
+    radioOn = reply.state == 1 || reply.state == 2;
+    if (!radioOn) sleepEnd = 0;
+    radioVolume = reply.volume;
+    for (int i=0; i<8; ++i) if (RADIO_WIRE_ID[i] == reply.station) radioStation = i;
+    if (sldRadioVolume && !lv_obj_has_state(sldRadioVolume, LV_STATE_PRESSED))
+      lv_slider_set_value(sldRadioVolume, radioVolume, LV_ANIM_OFF);
+    if (wasOn != radioOn) refreshHomeTiles();
+  }
+  refreshRadio();
+}
 
 static lv_obj_t *lblAcPower = NULL, *lblAcTemp = NULL;
 
@@ -3249,14 +4153,11 @@ static const Station kStation[8] = {
   { "Drone Zone",   0xA04F7E },
 };
 
-// The home tiles used to toggle their own state and repaint on the
-// spot. They navigate now, so the state they show is set on the sub
-// screens and has to be refreshed on the way back. Once per
-// navigation, never on a timer - a large image repainted repeatedly
-// is what made the old panel twitch.
+// Refresh after a state change or navigation, rather than repeatedly
+// repainting large images on a timer.
 static void refreshHomeTiles() {
   if (tileBedImg) {
-    lv_img_set_src(tileBedImg, bedRunning ? &img_bed_on : &img_bed_off);
+    lv_img_set_src(tileBedImg, bedRunning ? &home_bed_on : &home_bed_off);
     repaintOwner(tileBedImg);
   }
   if (tileRadioImg) {
@@ -3264,10 +4165,10 @@ static void refreshHomeTiles() {
     repaintOwner(tileRadioImg);
   }
   if (tileACImg) {
-    lv_img_set_src(tileACImg, acPower ? &img_ac_on : &img_ac_off);
+    lv_img_set_src(tileACImg, acPower ? &home_ac_on : &home_ac_off);
     repaintOwner(tileACImg);
   }
-  if (tileFanImg) repaintOwner(tileFanImg);
+  if (tileFanImg) { lv_img_set_src(tileFanImg, fanOn ? home_fan_frames[0] : &home_fan_off); repaintOwner(tileFanImg); }
 }
 
 static lv_obj_t *navBack(lv_obj_t *scr, const char *title) {
@@ -3275,7 +4176,8 @@ static lv_obj_t *navBack(lv_obj_t *scr, const char *title) {
   lv_obj_clear_flag(scr, LV_OBJ_FLAG_SCROLLABLE);
   lv_obj_add_event_cb(scr, evAnyPress, LV_EVENT_PRESSED, NULL);
 
-  lv_obj_t *b = setBtn(scr, 56, 56, "<", evGoHome, BACK_COL);   // a SQUARE
+  lv_obj_add_event_cb(scr, evScreenAccessibility, LV_EVENT_SCREEN_LOADED, NULL);
+  lv_obj_t *b = setBtn(scr, 64, 64, "<", evGoHome, BACK_COL);   // a SQUARE
   lv_obj_align(b, LV_ALIGN_TOP_LEFT, 14, 8);
 
   lv_obj_t *t = lv_label_create(scr);
@@ -3284,6 +4186,91 @@ static lv_obj_t *navBack(lv_obj_t *scr, const char *title) {
   lv_obj_set_style_text_color(t, lv_color_white(), 0);
   lv_obj_align(t, LV_ALIGN_TOP_MID, 0, 20);
   return t;
+}
+
+// Keep the original sleeping-man artwork. The red dot is shown only after
+// Listener confirms that the WAV recording file is open.
+static void buildDreams() {
+  scrDreams = lv_obj_create(NULL);
+  navBack(scrDreams, "Dreams");
+  lv_obj_t *picture = lv_img_create(scrDreams);
+  lv_img_set_src(picture, &img_dream);
+  lv_obj_align(picture, LV_ALIGN_TOP_MID, 0, 112);
+  lv_obj_clear_flag(picture, LV_OBJ_FLAG_CLICKABLE);
+  dreamBuildControls(scrDreams, picture);
+  lv_obj_add_event_cb(scrDreams, dreamCloseBrowserOnLeave,
+                      LV_EVENT_SCREEN_UNLOADED, nullptr);
+}
+
+static constexpr uint8_t BED_ID_IRA     = NODE_BEDBOX_IRA;
+static constexpr uint8_t BED_DEFAULT_LEVEL = 60;
+
+static void sendBedCommand(uint8_t cmd, uint8_t target, uint8_t value) {
+  BedRequest request{{ BED_ID_IRA, cmd, target, value }};
+  if (!bedCommandQueue || xQueueSend(bedCommandQueue, &request, 0) != pdPASS) {
+    Serial.println("[BED] command queue full/unavailable"); return;
+  }
+  const uint8_t *f = request.bytes;
+  Serial.printf("[BED TX] bed=%u cmd=%u target=%u value=%u\n",
+                f[0], f[1], f[2], f[3]);
+}
+static void sendAcCommand(uint8_t command, uint8_t value) {
+  AcRequest request{command, value};
+  if (!acCommandQueue || xQueueSend(acCommandQueue, &request, 0) != pdPASS) {
+    snprintf(rsAcStatus, sizeof(rsAcStatus), "AC IR: queue unavailable");
+    rsAcStatusUntil = millis() + 5000UL;
+    Serial.println("[AC IR] command queue unavailable");
+    return;
+  }
+  Serial.printf("[AC IR TX QUEUED] cmd=%u value=%u\n", command, value);
+}
+// ---------------- Light and shutters ----------------
+static lv_obj_t *lblLampState = NULL, *lblShadeState = NULL;
+static lv_obj_t *swLamp = NULL, *btnShadePower = NULL;
+
+static void setLampPower(bool on) {
+  lampOn = on;
+  if (swLamp) {
+    if (on) lv_obj_add_state(swLamp, LV_STATE_CHECKED);
+    else lv_obj_clear_state(swLamp, LV_STATE_CHECKED);
+    toggleFace(swLamp);
+  }
+  lv_obj_set_style_img_recolor(tileLampImg,
+      lv_color_black(), 0);
+  repaintOwner(tileLampImg);
+  if (lblLampState) lv_label_set_text(lblLampState, lampOn ? "Light ON" : "Light OFF");
+}
+
+static void evLampPower(lv_event_t *e) {
+  setLampPower(lv_obj_has_state(lv_event_get_target(e), LV_STATE_CHECKED));
+}
+
+static void buildLamp() {
+  scrLamp = lv_obj_create(NULL);
+  navBack(scrLamp, "Light");
+  lblLampState = setBigLabel(scrLamp, lampOn ? "Light ON" : "Light OFF");
+  lv_obj_align(lblLampState, LV_ALIGN_CENTER, 0, -70);
+  lv_obj_t *power = swLamp = makeToggle(scrLamp, evLampPower, lampOn);
+  lv_obj_align(power, LV_ALIGN_CENTER, 0, 20);
+}
+
+static void toggleShadePower() {
+  shadeOpen = !shadeOpen;
+  lv_img_set_src(tileShadeImg, shadeOpen ? &img_shade_open : &img_shade_closed);
+  repaintOwner(tileShadeImg);
+  if (lblShadeState) lv_label_set_text(lblShadeState, shadeOpen ? "Shutters OPEN" : "Shutters CLOSED");
+  if (btnShadePower) lv_label_set_text(lv_obj_get_child(btnShadePower, 0), shadeOpen ? "Close" : "Open");
+}
+
+static void evShadePower(lv_event_t *) { toggleShadePower(); }
+
+static void buildShade() {
+  scrShade = lv_obj_create(NULL);
+  navBack(scrShade, "Shutters");
+  lblShadeState = setBigLabel(scrShade, shadeOpen ? "Shutters OPEN" : "Shutters CLOSED");
+  lv_obj_align(lblShadeState, LV_ALIGN_CENTER, 0, -70);
+  lv_obj_t *power = btnShadePower = setBtn(scrShade, 240, 80, shadeOpen ? "Close" : "Open", evShadePower, 0x2A3040);
+  lv_obj_align(power, LV_ALIGN_CENTER, 0, 20);
 }
 
 // ---------------- Massage ----------------
@@ -3322,9 +4309,30 @@ static void refreshPatTiles() {
 
 static void evPreset(lv_event_t *e) {
   int i = (int)(intptr_t)lv_event_get_user_data(e);
-  massPattern = (massPattern == i) ? -1 : i;
-  bedRunning  = (massPattern >= 0);
-  if (!bedRunning) massEnd = 0;
+
+  if (massPattern == i) {
+    if (massPattern >= 0) lastMassPattern = massPattern;
+    massPattern = -1;
+    bedRunning = false;
+    massEnd = 0;
+    sendBedCommand(BED_CMD_OFF, 0, 0);
+  } else {
+    massPattern = i;
+    bedRunning = true;
+
+    // TEST071: FULL is tile 3 in the actual UI order.
+    // UI 0,1,2 -> BedBox presets 0,1,2
+    // UI 3     -> ALL motors 100 percent
+    // UI 4..11 -> BedBox presets 3..10
+    if (i == 3) {
+      sendBedCommand(BED_CMD_ALL, 0, 100);
+    } else if (i >= 0 && i < 3) {
+      sendBedCommand(BED_CMD_PRESET, (uint8_t)i, BED_DEFAULT_LEVEL);
+    } else if (i >= 4 && i <= 11) {
+      sendBedCommand(BED_CMD_PRESET, (uint8_t)(i - 1), BED_DEFAULT_LEVEL);
+    }
+  }
+
   refreshPatTiles();
   Serial.printf("[massage] pattern %d\n", massPattern);
 }
@@ -3332,6 +4340,9 @@ static void evPreset(lv_event_t *e) {
 static void evZone(lv_event_t *e) {
   int z = (int)(intptr_t)lv_event_get_user_data(e);
   int v = lv_slider_get_value(lv_event_get_target(e));
+  if (z >= 0 && z < 4 && lblZoneValue[z])
+    lv_label_set_text_fmt(lblZoneValue[z], "%d%%", v);
+  sendBedCommand(BED_CMD_ZONE, (uint8_t)z, (uint8_t)constrain(v, 0, 100));
   Serial.printf("[massage] zone %d = %d\n", z + 1, v);
 }
 
@@ -3350,6 +4361,7 @@ static void massStart(int minutes) {
   }
   massEnd = millis() + (uint32_t)massTimer * 60000UL;
   if (massEnd == 0) massEnd = 1;        // 0 is the "not running" marker
+  sendBedCommand(BED_CMD_TIMER, 0, (uint8_t)massTimer);
   refreshPatTiles();
   Serial.printf("[massage] timer %d min\n", massTimer);
 }
@@ -3372,13 +4384,32 @@ static void evMassTimerSld(lv_event_t *e) {
 }
 static void evMassTimerDone(lv_event_t *e) { massStart(massTimer); }
 
-static void evMassPower(lv_event_t *e) {
-  bedRunning = lv_obj_has_state(lv_event_get_target(e), LV_STATE_CHECKED);
-  if (!bedRunning) { massPattern = -1; massEnd = 0; }
-  else if (massPattern < 0) massPattern = 0;   // a switch that does nothing is worse
+static void setMassagePower(bool on) {
+  bedRunning = on;
+
+  if (!bedRunning) {
+    if (massPattern >= 0) lastMassPattern = massPattern;
+    massPattern = -1;
+    massEnd = 0;
+    sendBedCommand(BED_CMD_OFF, 0, 0);
+  } else {
+    if (massPattern < 0) massPattern = lastMassPattern;
+    if (massPattern == 3)
+      sendBedCommand(BED_CMD_ALL, 0, 100);
+    else if (massPattern >= 0 && massPattern < 3)
+      sendBedCommand(BED_CMD_PRESET, (uint8_t)massPattern, BED_DEFAULT_LEVEL);
+    else if (massPattern >= 4 && massPattern <= 11)
+      sendBedCommand(BED_CMD_PRESET, (uint8_t)(massPattern - 1), BED_DEFAULT_LEVEL);
+  }
+
   refreshPatTiles();
   Serial.printf("[massage] %s\n", bedRunning ? "on" : "off");
 }
+
+static void evMassPower(lv_event_t *e) {
+  setMassagePower(lv_obj_has_state(lv_event_get_target(e), LV_STATE_CHECKED));
+}
+
 
 // Once a second, from sensorTick.
 static void massTick() {
@@ -3387,6 +4418,7 @@ static void massTick() {
   massEnd = 0;
   massPattern = -1;
   bedRunning = false;
+  sendBedCommand(BED_CMD_OFF, 0, 0);
   refreshPatTiles();
   Serial.println("[massage] timer expired - massage off");
 }
@@ -3403,10 +4435,22 @@ static void buildMassage() {
   lv_obj_t *tt = navBack(scrMassage, MASS_TITLE);
   lv_obj_set_style_text_font(tt, &font_hebrew_28, 0);
 
+  // Live result of the IRA BedBox motor test. It is deliberately on the
+  // massage screen so the command, acknowledgement and automatic stop are
+  // visible without opening the USB monitor.
+  lblBedLink = lv_label_create(scrMassage);
+  lv_label_set_text(lblBedLink, rsBedStatus);
+  lv_obj_set_width(lblBedLink, 440);
+  lv_label_set_long_mode(lblBedLink, LV_LABEL_LONG_DOT);
+  lv_obj_set_style_text_font(lblBedLink, &lv_font_montserrat_16, 0);
+  lv_obj_set_style_text_color(lblBedLink, lv_color_hex(0x2BD4A0), 0);
+  lv_obj_set_style_text_align(lblBedLink, LV_TEXT_ALIGN_RIGHT, 0);
+  lv_obj_align(lblBedLink, LV_ALIGN_TOP_RIGHT, -18, 24);
+
   // lblMassMode stood at the top right showing the chosen pattern -
   // the "something, I do not know what sign it is". Gone, per Shemi.
 
-  const int TW = 168, TH = 120, TX = 20, TY = 78, TGX = 12, TGY = 12;
+  const int TW = 168, TH = 114, TX = 20, TY = 78, TGX = 12, TGY = 12;
   for (int i = 0; i < 12; i++) {
     lv_obj_t *b = lv_btn_create(scrMassage);
     lv_obj_set_size(b, TW, TH);
@@ -3426,7 +4470,7 @@ static void buildMassage() {
   // Four upright zone sliders. Numbered, not named: a Hebrew word
   // will not fit legibly in a 34 px column, and 1 head, 2 upper
   // back, 3 lower back, 4 legs is the order of the bed itself.
-  const int SW = 34, SH = 300, SX = 776, SY = 108, SGX = 58;
+  const int SW = 20, SH = 300, SX = 775, SY = 108, SGX = 64;
   for (int z = 0; z < 4; z++) {
     int x = SX + z * SGX;
 
@@ -3434,6 +4478,16 @@ static void buildMassage() {
     lv_obj_set_size(sldZone[z], SW, SH);      // taller than wide = upright
     lv_obj_align(sldZone[z], LV_ALIGN_TOP_LEFT, x, SY);
     lv_slider_set_range(sldZone[z], 0, 100);
+    // TEST071: thin track, but keep the thumb/knob easy to see and grab.
+    lv_obj_set_style_pad_all(sldZone[z], 7, LV_PART_KNOB);
+
+    lblZoneValue[z] = lv_label_create(scrMassage);
+    lv_label_set_text(lblZoneValue[z], "0%");
+    lv_obj_set_style_text_font(lblZoneValue[z], &lv_font_montserrat_26, 0);
+    lv_obj_set_style_text_color(lblZoneValue[z], lv_color_hex(0xFFFFFF), 0);
+    lv_obj_set_width(lblZoneValue[z], 56);
+    lv_obj_set_style_text_align(lblZoneValue[z], LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_align(lblZoneValue[z], LV_ALIGN_TOP_LEFT, x - 18, 78);
     lv_obj_set_style_bg_color(sldZone[z], lv_color_hex(0x1A1E2A), LV_PART_MAIN);
     lv_obj_set_style_bg_color(sldZone[z], lv_color_hex(0x12B886), LV_PART_INDICATOR);
     lv_obj_set_style_bg_color(sldZone[z], lv_color_hex(0x2BD4A0), LV_PART_KNOB);
@@ -3471,14 +4525,14 @@ static void buildMassage() {
 
   lblMassTimer = lv_label_create(scrMassage);
   lv_obj_set_style_text_font(lblMassTimer, &lv_font_montserrat_16, 0);
-  lv_obj_align(lblMassTimer, LV_ALIGN_TOP_LEFT, 20, 470);
+  lv_obj_align(lblMassTimer, LV_ALIGN_TOP_LEFT, 20, 452);
 
   const int tm[3] = { 15, 30, 60 };
   for (int i = 0; i < 3; i++) {
     char cap[8];
     snprintf(cap, sizeof(cap), "%d", tm[i]);
     lv_obj_t *b = setBtnU(scrMassage, 130, 52, cap, evTimerBtn, 0x1F5A8A, tm[i]);
-    lv_obj_align(b, LV_ALIGN_TOP_LEFT, 20 + i * 142, 498);
+    lv_obj_align(b, LV_ALIGN_TOP_LEFT, 20 + i * 142, 478);
   }
 
   sldMassTimer = lv_slider_create(scrMassage);
@@ -3487,7 +4541,7 @@ static void buildMassage() {
   lv_obj_set_size(sldMassTimer, 414, 26);
   lv_slider_set_range(sldMassTimer, 5, 60);
   lv_slider_set_value(sldMassTimer, massTimer, LV_ANIM_OFF);
-  lv_obj_align(sldMassTimer, LV_ALIGN_TOP_LEFT, 20, 562);
+  lv_obj_align(sldMassTimer, LV_ALIGN_TOP_LEFT, 24, 568);
   lv_obj_add_event_cb(sldMassTimer, evMassTimerSld,  LV_EVENT_VALUE_CHANGED, NULL);
   lv_obj_add_event_cb(sldMassTimer, evMassTimerDone, LV_EVENT_RELEASED,      NULL);
 
@@ -3495,13 +4549,17 @@ static void buildMassage() {
   // Into the button row as well: buttons end at 434, so the switch
   // starts at 454 and the slider below still stops at 434.
   swMassage = makeToggle(scrMassage, evMassPower, bedRunning);
-  lv_obj_align(swMassage, LV_ALIGN_TOP_LEFT, 454, 494);
+  lv_obj_align(swMassage, LV_ALIGN_TOP_LEFT, 454, 478);
 
   lv_obj_t *mcap = lv_label_create(scrMassage);
   lv_label_set_text(mcap, "Massage");
   lv_obj_set_style_text_font(mcap, &lv_font_montserrat_16, 0);
   lv_obj_set_style_text_color(mcap, lv_color_hex(0xD8DEE8), 0);
-  lv_obj_align(mcap, LV_ALIGN_TOP_LEFT, 454, 470);
+  lv_obj_align(mcap, LV_ALIGN_TOP_LEFT, 454, 452);
+
+  lv_obj_t *testBtn = setBtnU(scrMassage, 250, 52, "TEST ALL", evIraMotorTest,
+                               0x8A5A24, 0);
+  lv_obj_align(testBtn, LV_ALIGN_TOP_LEFT, 700, 478);
 
   refreshPatTiles();
 }
@@ -3522,7 +4580,7 @@ static int32_t sleepLeftMs() {
 static void refreshStations() {
   for (int i = 0; i < 8; i++) {
     if (!radioBtn[i]) continue;
-    bool sel = (i == radioStation);
+    bool sel = radioOn && (i == radioStation);
     lv_color_t full = lv_color_hex(kStation[i].colour);
     lv_color_t dull = lv_color_mix(full, lv_color_hex(0x1A1E2A), 96);
     lv_obj_set_style_bg_color(radioBtn[i], sel ? full : dull, 0);
@@ -3532,9 +4590,12 @@ static void refreshStations() {
 }
 
 static void refreshRadio() {
+  const lv_img_dsc_t *dialImage = radioOn ? &img_radio_on : &img_radio_off;
+  if (radioDial && lv_img_get_src(radioDial) != dialImage) lv_img_set_src(radioDial, dialImage);
   refreshStations();
+  if (lblRadioState) lv_label_set_text(lblRadioState, radioStateText);
   if (lblRadioVol)
-    lv_label_set_text_fmt(lblRadioVol, "Volume  %d", radioVolume);
+    lv_label_set_text_fmt(lblRadioVol, "Volume %d%%", (radioVolume * 100 + 10) / 21);
 
   {
     static bool blink = false;
@@ -3566,9 +4627,13 @@ static void evStation(lv_event_t *e) {
   if (swRadio) lv_obj_add_state(swRadio, LV_STATE_CHECKED);
   if (swRadio) toggleFace(swRadio);
   refreshRadio();
+  requestRadioPlayback();
   Serial.printf("[radio] %s\n", kStation[radioStation].name);
 }
 
+static void evRadioVolDone(lv_event_t *e) {
+  queueRadioAudio(3, 0, radioVolume);
+}
 static void evRadioVol(lv_event_t *e) {
   radioVolume = lv_slider_get_value(lv_event_get_target(e));
   refreshRadio();
@@ -3623,18 +4688,9 @@ static void evSleepSlider(lv_event_t *e) {
 static void evSleepSliderDone(lv_event_t *e) { sleepStart(sleepMin); }
 
 static void evRadioPower(lv_event_t *e) {
-  bool on = lv_obj_has_state(lv_event_get_target(e), LV_STATE_CHECKED);
-  radioOn = on;
-  if (on) {
-    // A power switch that appears to do nothing is worse than one
-    // that makes an obvious choice.
-    if (radioStation < 0) radioStation = 0;
-    Serial.printf("[radio] on - %s\n", kStation[radioStation].name);
-  } else {
-    radioStation = -1;
-    sleepEnd = 0;              // nothing left for the timer to switch off
-    Serial.println("[radio] off");
-  }
+  radioBrowserCancelSelection();
+  bool queued = queueRadioAudio(6, 0, 0); // atomic toggle at the shared AudioNode
+  radioStateText = queued ? "Power request sent..." : "Radio link unavailable. Try again.";
   refreshRadio();
 }
 
@@ -3645,89 +4701,19 @@ static void sleepTick() {
   updateTimerBadge(badgeRadio, -1, false);
   updateTimerBadge(badgeHome,  -1, false);
   sleepEnd = 0;
-  radioStation = -1;
   radioOn = false;
   if (swRadio) { lv_obj_clear_state(swRadio, LV_STATE_CHECKED); toggleFace(swRadio); }
   refreshRadio();
+  requestRadioPlayback();
   Serial.println("[radio] sleep timer expired - radio off");
 }
 
+#include "radio_browser_ui.h"
+#include "ambient_ui.h"
+#include "radio_settings_ui.h"
+
 static void buildRadio() {
-  scrRadio = lv_obj_create(NULL);
-  lv_obj_t *rt = navBack(scrRadio, RADIO_TITLE);
-  lv_obj_set_style_text_font(rt, &font_hebrew_28, 0);
-
-  const int SW = 230, SH = 110, SX = 24, SY = 92, SG = 16;
-  for (int i = 0; i < 8; i++) {
-    lv_obj_t *b = setBtnU(scrRadio, SW, SH, kStation[i].name, evStation,
-                          kStation[i].colour, i);
-    radioBtn[i] = b;
-    lv_obj_align(b, LV_ALIGN_TOP_LEFT,
-                 SX + (i % 4) * (SW + SG), SY + (i / 4) * (SH + SG));
-    // setBtnU labels at 16; these want to be readable from the bed.
-    lv_obj_set_style_text_font(lv_obj_get_child(b, 0),
-                               &lv_font_montserrat_26, 0);
-  }
-
-  lblRadioVol = lv_label_create(scrRadio);
-  lv_obj_set_style_text_font(lblRadioVol, &lv_font_montserrat_16, 0);
-  lv_obj_set_style_text_color(lblRadioVol, lv_color_hex(0x8A94A0), 0);
-  lv_obj_align(lblRadioVol, LV_ALIGN_TOP_LEFT, 24, 352);
-
-  lv_obj_t *sl = lv_slider_create(scrRadio);
-  lv_obj_set_size(sl, 620, 26);
-  lv_slider_set_range(sl, 0, 21);
-  lv_slider_set_value(sl, radioVolume, LV_ANIM_OFF);
-  lv_obj_align(sl, LV_ALIGN_TOP_LEFT, 24, 382);
-  lv_obj_add_flag(sl, LV_OBJ_FLAG_EVENT_BUBBLE);
-  lv_obj_add_event_cb(sl, evRadioVol, LV_EVENT_VALUE_CHANGED, NULL);
-
-  lv_obj_t *vm = lv_label_create(scrRadio);
-  lv_label_set_text(vm, "MAX");
-  lv_obj_set_style_text_font(vm, &lv_font_montserrat_16, 0);
-  lv_obj_set_style_text_color(vm, lv_color_hex(0xC8CDDB), 0);
-  lv_obj_align(vm, LV_ALIGN_TOP_LEFT, 652, 386);
-
-  lblSleep = lv_label_create(scrRadio);
-  lv_obj_set_style_text_font(lblSleep, &lv_font_montserrat_16, 0);
-  lv_obj_align(lblSleep, LV_ALIGN_TOP_LEFT, 24, 434);
-
-  badgeRadio = makeTimerBadge(scrRadio);
-  // Was at 400, which the switch now sits on. Out to the right,
-  // where nothing else reaches.
-  lv_obj_align(badgeRadio, LV_ALIGN_TOP_RIGHT, -24, 458);
-
-  const uint8_t pre[3] = { 10, 30, 60 };
-  for (int i = 0; i < 3; i++) {
-    char cap[10];
-    snprintf(cap, sizeof(cap), "%u min", pre[i]);
-    lv_obj_t *b = setBtnU(scrRadio, 128, 54, cap, evSleepPreset,
-                          0x1F5A8A, pre[i]);
-    lv_obj_align(b, LV_ALIGN_TOP_LEFT, 24 + i * 140, 462);
-  }
-  // In the button row, immediately right of the 60 button, which
-  // ends at 432. The slider below still ends at 432 too.
-  swRadio = makeToggle(scrRadio, evRadioPower, radioOn);
-  lv_obj_align(swRadio, LV_ALIGN_TOP_LEFT, 452, 458);
-
-  lv_obj_t *rp = lv_label_create(scrRadio);
-  lv_label_set_text(rp, "Radio");
-  lv_obj_set_style_text_font(rp, &lv_font_montserrat_16, 0);
-  lv_obj_set_style_text_color(rp, lv_color_hex(0xD8DEE8), 0);
-  lv_obj_align(rp, LV_ALIGN_TOP_LEFT, 452, 434);
-
-
-  sldSleep = lv_slider_create(scrRadio);
-  // Ends exactly where the 60 minute button ends: buttons at 24,
-  // 164, 304, each 128 wide, so the row ends at 432. 24 + 408 = 432.
-  lv_obj_set_size(sldSleep, 408, 26);
-  lv_slider_set_range(sldSleep, 1, 60);   // matches the three buttons
-  lv_slider_set_value(sldSleep, sleepMin, LV_ANIM_OFF);
-  lv_obj_align(sldSleep, LV_ALIGN_TOP_LEFT, 24, 536);
-  lv_obj_add_event_cb(sldSleep, evSleepSlider,     LV_EVENT_VALUE_CHANGED, NULL);
-  lv_obj_add_event_cb(sldSleep, evSleepSliderDone, LV_EVENT_RELEASED,      NULL);
-
-  refreshRadio();
+  radioBrowserBuild();
 }
 
 // ---------------- Air conditioner ----------------
@@ -3757,6 +4743,13 @@ static void refreshAC() {
   if (acSwingBtn)
     lv_obj_set_style_bg_color(acSwingBtn,
         lv_color_hex(acSwing ? 0x2080FF : 0x2A3346), 0);
+  if (lblAcLink) {
+    if (rsAcStatusUntil && (int32_t)(rsAcStatusUntil - millis()) <= 0) {
+      rsAcStatusUntil = 0;
+      snprintf(rsAcStatus, sizeof(rsAcStatus), "AC IR: ready");
+    }
+    lv_label_set_text(lblAcLink, rsAcStatus);
+  }
 }
 
 
@@ -3766,6 +4759,7 @@ static void acSetPower(bool on) {
   acPower = on;
   refreshAC();
   refreshHomeTiles();
+  sendAcCommand(0, acPower ? 1 : 0);
   Serial.printf("[ac] %s\n", acPower ? "on" : "off");
 }
 
@@ -3773,21 +4767,26 @@ static void evAcPwr (lv_event_t *e) { acSetPower(!acPower); }
 static void evAcMode(lv_event_t *e) {
   acMode = (int)(intptr_t)lv_event_get_user_data(e);
   refreshAC();
+  sendAcCommand(2, (uint8_t)acMode);
   Serial.printf("[ac] mode %s\n", AC_MODE_NAME[acMode]);
 }
 static void evAcFan(lv_event_t *e) {
   acFanSp = (int)(intptr_t)lv_event_get_user_data(e);
   refreshAC();
+  sendAcCommand(3, (uint8_t)acFanSp);
   Serial.printf("[ac] fan %s\n", AC_FAN_NAME[acFanSp]);
 }
 static void evAcSwing(lv_event_t *e) {
   acSwing = !acSwing;
   refreshAC();
+  sendAcCommand(4, acSwing ? 1 : 0);
   Serial.printf("[ac] swing %s\n", acSwing ? "on" : "off");
 }
 static void evAcUp  (lv_event_t *e) { if (acTemp < 30) acTemp++; refreshAC();
+                                      sendAcCommand(1, (uint8_t)acTemp);
                                       Serial.printf("[ac] target %d\n", acTemp); }
 static void evAcDn  (lv_event_t *e) { if (acTemp > 16) acTemp--; refreshAC();
+                                      sendAcCommand(1, (uint8_t)acTemp);
                                       Serial.printf("[ac] target %d\n", acTemp); }
 
 static void buildAC() {
@@ -3795,7 +4794,7 @@ static void buildAC() {
   navBack(scrAC, "Air conditioner");
 
   lv_obj_t *pw = setBtn(scrAC, 150, 56, "OFF", evAcPwr, 0x2A3040);
-  lv_obj_align(pw, LV_ALIGN_TOP_RIGHT, -20, 8);
+  lv_obj_align(pw, LV_ALIGN_TOP_RIGHT, -24, 88);
   lblAcPower = lv_obj_get_child(pw, 0);
 
   lv_obj_t *dn = setBtn(scrAC, 110, 110, "-", evAcDn, 0x2A3040);
@@ -3860,12 +4859,14 @@ static void buildAC() {
   acSwingBtn = setBtn(scrAC, 160, 62, "Swing", evAcSwing, 0x2A3346);
   lv_obj_align(acSwingBtn, LV_ALIGN_TOP_LEFT, 120, 474);
 
-  // The old screen's honest note, kept word for word where it
-  // matters: this AC does not report back.
+  lblAcLink = lv_label_create(scrAC);
+  lv_obj_set_style_text_font(lblAcLink, &lv_font_montserrat_16, 0);
+  lv_obj_set_style_text_color(lblAcLink, lv_color_hex(0x2BD4A0), 0);
+  lv_obj_align(lblAcLink, LV_ALIGN_TOP_RIGHT, -24, 56);
+
   lv_obj_t *note = lv_label_create(scrAC);
   lv_label_set_text(note,
-    "Shows what was last commanded - this AC does not report back.\n"
-    "Gree protocol is decoded; the IR emitter lives in bedbox_shemi.");
+    "Gree IR control via BedBox IRA; command acknowledgement is shown above.");
   lv_obj_set_style_text_font(note, &lv_font_montserrat_14, 0);
   lv_obj_set_style_text_color(note, lv_color_hex(0x66707E), 0);
   lv_obj_align(note, LV_ALIGN_BOTTOM_MID, 0, -8);
@@ -3875,46 +4876,103 @@ static void buildAC() {
 
 // ---------------- Fan ----------------
 
+static lv_obj_t *swFan = NULL;
+
+static void refreshFanRemote();
 static void refreshFan() {
-  if (!lblFanSpeed) return;
-  if (fanSpeed == 0) lv_label_set_text(lblFanSpeed, "off");
-  else               lv_label_set_text_fmt(lblFanSpeed, "speed %d", fanSpeed);
+  refreshFanRemote();
+  if (lblFanSpeed) {
+    if (fanSpeed == 0) lv_label_set_text(lblFanSpeed, "off");
+    else lv_label_set_text_fmt(lblFanSpeed, "speed %d", fanSpeed);
+  }
+  if (swFan) {
+    if (fanOn) lv_obj_add_state(swFan, LV_STATE_CHECKED);
+    else lv_obj_clear_state(swFan, LV_STATE_CHECKED);
+    toggleFace(swFan);
+  }
+}
+
+static void setFanPower(bool on) {
+  if (on) fanSpeed = lastFanSpeed > 0 ? lastFanSpeed : 2;
+  else { if (fanSpeed > 0) lastFanSpeed = fanSpeed; fanSpeed = 0; }
+  fanOn = fanSpeed > 0;
+  refreshFan();
+  refreshHomeTiles();
+  Serial.printf("[fan] %s\n", fanOn ? "on" : "off");
+}
+
+static void evFanPower(lv_event_t *e) {
+  setFanPower(lv_obj_has_state(lv_event_get_target(e), LV_STATE_CHECKED));
 }
 
 static void evFanSpeed(lv_event_t *e) {
-  fanSpeed = (int)(intptr_t)lv_event_get_user_data(e);
-  fanOn = (fanSpeed > 0);
+  int selected = (int)(intptr_t)lv_event_get_user_data(e);
+  if (selected < 0 || selected > 6) return;
+  if (selected > 0) lastFanSpeed = selected;
+  else if (fanSpeed > 0) lastFanSpeed = fanSpeed;
+  fanSpeed = selected;
+  fanOn = fanSpeed > 0;
   refreshFan();
+  refreshHomeTiles();
   Serial.printf("[fan] speed %d\n", fanSpeed);
 }
 
+// All fourteen controls from the captured SQ19D-F20 remote. These are
+// panel-local selections until a proven RF transmitter backend is integrated.
+static bool fanLampPreview=false,fanReversePreview=false,fanWavePreview=false;
+static int fanTimerPreview=0;
+static lv_obj_t *fanExtraButtons[3]={};
+static lv_obj_t *fanSpeedButtons[6]={};
+static lv_obj_t *fanTimerButtons[4]={};
+static void refreshFanRemote() {
+  const bool active[3]={fanLampPreview,fanReversePreview,fanWavePreview};
+  for(int i=0;i<3;++i) if(fanExtraButtons[i]) lv_obj_set_style_bg_color(fanExtraButtons[i],lv_color_hex(active[i]?0x207C76:0x293445),0);
+  for(int i=0;i<6;++i) if(fanSpeedButtons[i]) lv_obj_set_style_bg_color(fanSpeedButtons[i],lv_color_hex(fanSpeed==i+1?0x207C76:0x293445),0);
+  const int hours[4]={1,2,4,8};
+  for(int i=0;i<4;++i) if(fanTimerButtons[i]) lv_obj_set_style_bg_color(fanTimerButtons[i],lv_color_hex(fanTimerPreview==hours[i]?0x207C76:0x293445),0);
+}
+static void evFanRemote(lv_event_t *e) {
+  int action=(int)(intptr_t)lv_event_get_user_data(e);
+  if(action==0) fanLampPreview=!fanLampPreview;
+  else if(action==1) fanReversePreview=!fanReversePreview;
+  else if(action==2) fanWavePreview=!fanWavePreview;
+  else {const int hours[4]={1,2,4,8};int h=hours[action-3];fanTimerPreview=fanTimerPreview==h?0:h;}
+  refreshFanRemote();
+}
+static void evFanRemoteSpeed(lv_event_t *e) {evFanSpeed(e);refreshFanRemote();}
+static void evFanRemotePower(lv_event_t *e) {evFanPower(e);refreshFanRemote();}
 static void buildFan() {
-  scrFan = lv_obj_create(NULL);
-  navBack(scrFan, "Fan");
-
-  lblFanSpeed = lv_label_create(scrFan);
-  lv_obj_set_style_text_font(lblFanSpeed, &lv_font_montserrat_26, 0);
-  lv_obj_set_style_text_color(lblFanSpeed, lv_color_hex(0x60D0FF), 0);
-  lv_obj_align(lblFanSpeed, LV_ALIGN_TOP_MID, 0, 90);
-
-  const char *lbl[4] = { "off", "1", "2", "3" };
-  for (int i = 0; i < 4; i++) {
-    lv_obj_t *b = setBtnU(scrFan, 200, 150, lbl[i], evFanSpeed,
-                          i == 0 ? 0x8F1F1F : 0x232735, i);
-    lv_obj_align(b, LV_ALIGN_TOP_LEFT, 60 + i * 226, 180);
+  scrFan = lv_obj_create(NULL);navBack(scrFan,"Fan");
+  swFan=makeToggle(scrFan,evFanRemotePower,fanOn);
+  lv_obj_set_pos(swFan,774,92);
+  lblFanSpeed=lv_label_create(scrFan);
+  lv_obj_set_style_text_font(lblFanSpeed,&lv_font_montserrat_26,0);
+  lv_obj_set_style_text_color(lblFanSpeed,lv_color_hex(0x60D0FF),0);
+  lv_obj_set_pos(lblFanSpeed,54,106);
+  for(int i=0;i<6;++i) {
+    char text[8];snprintf(text,sizeof(text),"%d",i+1);
+    fanSpeedButtons[i]=setBtnU(scrFan,144,88,text,evFanRemoteSpeed,0x293445,i+1);
+    lv_obj_set_pos(fanSpeedButtons[i],40+i*160,172);
+    lv_obj_set_style_text_font(lv_obj_get_child(fanSpeedButtons[i],0),&font_clock_40,0);
   }
-
-  lv_obj_t *note = lv_label_create(scrFan);
-  lv_label_set_text(note,
-    "Westinghouse SQ19D-F20, 433 MHz, protocol 2, 29 bits.\n"
-    "Codes are captured but the fan has never answered a transmission,\n"
-    "and this panel has no transmitter. One way in any case - the\n"
-    "screen shows what it commanded, not what the fan did.");
-  lv_obj_set_style_text_font(note, &lv_font_montserrat_14, 0);
-  lv_obj_set_style_text_color(note, lv_color_hex(0x66707E), 0);
-  lv_obj_align(note, LV_ALIGN_BOTTOM_MID, 0, -40);
-
-  refreshFan();
+  const char *extra[3]={"Light","Reverse","Breeze"};
+  for(int i=0;i<3;++i) {
+    fanExtraButtons[i]=setBtnU(scrFan,296,84,extra[i],evFanRemote,0x293445,i);
+    lv_obj_set_pos(fanExtraButtons[i],40+i*324,286);
+    lv_obj_set_style_text_font(lv_obj_get_child(fanExtraButtons[i],0),&lv_font_montserrat_26,0);
+  }
+  const char *timers[4]={"1 h","2 h","4 h","8 h"};
+  for(int i=0;i<4;++i) {
+    fanTimerButtons[i]=setBtnU(scrFan,216,80,timers[i],evFanRemote,0x293445,i+3);
+    lv_obj_set_pos(fanTimerButtons[i],40+i*244,412);
+    lv_obj_set_style_text_font(lv_obj_get_child(fanTimerButtons[i],0),&lv_font_montserrat_26,0);
+  }
+  lv_obj_t *note=lv_label_create(scrFan);
+  lv_label_set_text(note,"Preview - fan connection pending");
+  lv_obj_set_style_text_font(note,&lv_font_montserrat_26,0);
+  lv_obj_set_style_text_color(note,lv_color_hex(0xE6AD42),0);
+  lv_obj_align(note,LV_ALIGN_BOTTOM_MID,0,-24);
+  refreshFan();refreshFanRemote();
 }
 
 // ------------------------------------------------------------
@@ -3928,7 +4986,7 @@ static void buildFan() {
 static lv_obj_t *acImg = NULL, *acWhen = NULL;
 
 static void alarmIconColour() {
-  if (acImg) lv_img_set_src(acImg, alarmOn ? &img_alarm_on : &img_alarm_off);
+  if (acImg) lv_img_set_src(acImg, alarmOn ? &home_alarm_on : &home_alarm_off);
   if (acWhen) {
     if (use12h) {
       const char *sfx;
@@ -3948,15 +5006,16 @@ static void alarmIconShake(bool on) {
   static bool phase = false;
   int dx = 0;
   if (on) { phase = !phase; dx = phase ? 5 : -5; }
-  if (acImg) lv_obj_align(acImg, LV_ALIGN_CENTER, dx, -12);
+  if (acImg) lv_obj_align(acImg, LV_ALIGN_CENTER, dx, 0);
 }
 
 static void alarmIconHands() { }   // the photograph has its own
 
 static void buildAlarmIcon(lv_obj_t *tile) {
   acImg = lv_img_create(tile);
-  lv_img_set_src(acImg, &img_alarm_off);
-  lv_obj_align(acImg, LV_ALIGN_CENTER, 0, -12);
+  lv_img_set_src(acImg, &home_alarm_off);
+  lv_img_set_zoom(acImg, 200); // full bells and base fit inside the 162px tile
+  lv_obj_align(acImg, LV_ALIGN_CENTER, 0, 0);
   lv_obj_clear_flag(acImg, LV_OBJ_FLAG_CLICKABLE);
 
   acWhen = lv_label_create(tile);
@@ -3964,6 +5023,7 @@ static void buildAlarmIcon(lv_obj_t *tile) {
   lv_obj_clear_flag(acWhen, LV_OBJ_FLAG_CLICKABLE);
   lv_obj_align(acWhen, LV_ALIGN_BOTTOM_MID, 0, -6);
 
+  lv_obj_add_flag(acWhen, LV_OBJ_FLAG_HIDDEN);
   alarmIconColour();
   Serial.printf("[alarm] icon built from photo, %s, set for %02d:%02d\n",
                 alarmOn ? "ARMED (red)" : "off (black)",
@@ -4077,15 +5137,15 @@ static void dropBootPhoto() {
 //
 // Ported from buildAnalog() in TEST 081 and rescaled from 800x480
 // to 1024x600. Round face, twelve ticks, the numbers 1..12, three
-// hands, and underneath the time in figures with temperature and
-// humidity.
+// hands, equal-size humidity/temperature corner readings, and a compact
+// day/date window. The analog clock is the only time display on this screen.
 // ============================================================
 #define SAV_CX      500
 #define SAV_CY      300
 #define SAV_R       250
 #define SAV_FACE_R  202
 
-static lv_obj_t *scrSaver = NULL;
+
 static lv_obj_t *savHandH = NULL, *savHandM = NULL, *savHandS = NULL;
 static lv_obj_t *savCoreH = NULL, *savCoreM = NULL;
 static lv_obj_t *savTemp = NULL, *savHum = NULL, *savAlarmImg = NULL;
@@ -4124,36 +5184,39 @@ static void savSeg(lv_obj_t *o, lv_point_t *p, float deg, int from, int to) {
 }
 
 static void saverUpdate() {
-  if (!scrSaver || !now.valid) return;
+  if (!scrSaver) return;
 
-  float as = now.sec * 6.0f;
-  if (savHandS) savSeg(savHandS, savPtS, as, -58, SAV_FACE_R - 12);
+  // Sensor readings remain useful even when the shared clock is unavailable.
+  if (now.valid) {
+    float as = now.sec * 6.0f;
+    if (savHandS) savSeg(savHandS, savPtS, as, -58, SAV_FACE_R - 12);
 
-  if (savSecDot) {
-    float r = as * 0.01745329f;
-    int dr = SAV_FACE_R - 34;
-    lv_obj_align(savSecDot, LV_ALIGN_TOP_LEFT,
-                 SAV_CX + (int)(dr * sinf(r)) - 9,
-                 SAV_CY - (int)(dr * cosf(r)) - 9);
-  }
-
-  static uint8_t lastMin = 255;
-  if (now.min != lastMin) {
-    lastMin = now.min;
-    float am = now.min * 6.0f;
-    float ah = ((now.hour % 12) * 30.0f) + (now.min * 0.5f);
-
-    if (savHandM) savSeg(savHandM, savPtM,  am, -28, SAV_FACE_R - 20);
-    if (savCoreM) savSeg(savCoreM, savPtMC, am, -16, SAV_FACE_R - 28);
-    if (savHandH) savSeg(savHandH, savPtH,  ah, -24, SAV_FACE_R - 74);
-    if (savCoreH) savSeg(savCoreH, savPtHC, ah, -12, SAV_FACE_R - 82);
-
-    if (savDate) lv_label_set_text_fmt(savDate, "%u", now.day);
-    if (savDow) {
-      const char *d = kDow[now.dow <= 7 ? now.dow : 0];
-      lv_label_set_text(savDow, d);
+    if (savSecDot) {
+      float r = as * 0.01745329f;
+      int dr = SAV_FACE_R - 34;
+      lv_obj_align(savSecDot, LV_ALIGN_TOP_LEFT,
+                   SAV_CX + (int)(dr * sinf(r)) - 9,
+                   SAV_CY - (int)(dr * cosf(r)) - 9);
     }
-  }
+
+    static uint8_t lastMin = 255;
+    if (now.min != lastMin) {
+      lastMin = now.min;
+      float am = now.min * 6.0f;
+      float ah = ((now.hour % 12) * 30.0f) + (now.min * 0.5f);
+
+      if (savHandM) savSeg(savHandM, savPtM,  am, -28, SAV_FACE_R - 20);
+      if (savCoreM) savSeg(savCoreM, savPtMC, am, -16, SAV_FACE_R - 28);
+      if (savHandH) savSeg(savHandH, savPtH,  ah, -24, SAV_FACE_R - 74);
+      if (savCoreH) savSeg(savCoreH, savPtHC, ah, -12, SAV_FACE_R - 82);
+
+      if (savDate) lv_label_set_text_fmt(savDate, "%u", now.day);
+      if (savDow) {
+        const char *d = kDow[now.dow <= 7 ? now.dow : 0];
+        lv_label_set_text(savDow, d);
+      }
+    }
+  } // valid clock
 
   if (savTemp) {
     if (shtOK && shtTempC > -10.0f && shtTempC < 60.0f) {
@@ -4177,10 +5240,13 @@ static void saverUpdate() {
 
 static void saverExit(lv_event_t *e) {
   if (!saverOn) return;
+  lv_indev_t *input = lv_indev_get_act();
+  if (input) lv_indev_wait_release(input); // wake gesture cannot click home
   saverOn = false;
   lastTouchMs = millis();
   applyBacklightQuiet(blBeforeSaver);
   if (scrHome) { refreshHomeTiles(); lv_scr_load(scrHome); }
+  persistentStatusSetVisible(true);
   Serial.println("[saver] out");
 }
 
@@ -4202,11 +5268,23 @@ static void savDot(lv_obj_t *par, int cx, int cy, int d) {
   lv_obj_align(core, LV_ALIGN_TOP_LEFT, cx - d/2, cy - d/2);
 }
 
+// Screen events also cover alarm/direct navigation away from the saver.
+// Visibility changes with the screen load, never a one-second sensor tick later.
+static void savScreenStatus(lv_event_t *e) {
+  if (lv_event_get_code(e) == LV_EVENT_SCREEN_LOAD_START)
+    persistentStatusSetVisible(false);
+  else if (lv_event_get_code(e) == LV_EVENT_SCREEN_UNLOADED &&
+           lv_scr_act() != scrSaver)
+    persistentStatusSetVisible(true);
+}
+
 static void buildSaver() {
   scrSaver = lv_obj_create(NULL);
   lv_obj_set_style_bg_color(scrSaver, lv_color_hex(0x01070C), 0);
   lv_obj_clear_flag(scrSaver, LV_OBJ_FLAG_SCROLLABLE);
   lv_obj_add_event_cb(scrSaver, saverExit, LV_EVENT_PRESSED, NULL);
+  lv_obj_add_event_cb(scrSaver, savScreenStatus, LV_EVENT_SCREEN_LOAD_START, NULL);
+  lv_obj_add_event_cb(scrSaver, savScreenStatus, LV_EVENT_SCREEN_UNLOADED, NULL);
 
   // 8 mm-looking gunmetal inner bezel/ring, centered exactly.
   lv_obj_t *bezel = lv_obj_create(scrSaver);
@@ -4308,25 +5386,27 @@ static void buildSaver() {
   {
     lv_obj_t *dw = lv_obj_create(scrSaver);
     lv_obj_remove_style_all(dw);
-    lv_obj_set_size(dw, 118, 46);
-    lv_obj_set_style_radius(dw, 4, 0);
+    lv_obj_set_size(dw, 89, 35); // round(118 * 0.75), round(46 * 0.75)
+    lv_obj_set_style_radius(dw, 3, 0);
     lv_obj_set_style_bg_opa(dw, LV_OPA_COVER, 0);
     lv_obj_set_style_bg_color(dw, lv_color_hex(0xB9B8B0), 0);
-    lv_obj_set_style_border_width(dw, 3, 0);
+    lv_obj_set_style_border_width(dw, 2, 0);
     lv_obj_set_style_border_color(dw, lv_color_hex(0x454642), 0);
-    lv_obj_align(dw, LV_ALIGN_TOP_LEFT, SAV_CX + 60, SAV_CY - 23);
+    // Preserve the old centre and draw directly at 75% size. A dedicated tiny
+    // font avoids transformed layers and keeps the whole window stable.
+    lv_obj_align(dw, LV_ALIGN_TOP_LEFT, SAV_CX + 75, SAV_CY - 17);
 
     savDate = lv_label_create(dw);
     lv_label_set_text(savDate, "--");
-    lv_obj_set_style_text_font(savDate, &lv_font_montserrat_26, 0);
+    lv_obj_set_style_text_font(savDate, &font_saver_date_20, 0);
     lv_obj_set_style_text_color(savDate, lv_color_black(), 0);
-    lv_obj_align(savDate, LV_ALIGN_LEFT_MID, 12, 0);
+    lv_obj_align(savDate, LV_ALIGN_LEFT_MID, 5, 0);
 
     savDow = lv_label_create(dw);
     lv_label_set_text(savDow, "---");
-    lv_obj_set_style_text_font(savDow, &lv_font_montserrat_26, 0);
+    lv_obj_set_style_text_font(savDow, &font_saver_date_20, 0);
     lv_obj_set_style_text_color(savDow, lv_color_black(), 0);
-    lv_obj_align(savDow, LV_ALIGN_RIGHT_MID, -8, 0);
+    lv_obj_align(savDow, LV_ALIGN_RIGHT_MID, -4, 0);
   }
 
   // Realistic broad luminous hands + thin red seconds hand.
@@ -4367,41 +5447,51 @@ static void buildSaver() {
   lv_obj_set_style_text_color(savHum, lv_color_hex(SAV_GREEN), 0);
   lv_obj_align(savHum, LV_ALIGN_TOP_LEFT, 62, 22);
 
-  // Humidity: three rain drops, clearer than one isolated drop.
-  const int dropX[3] = { 12, 27, 42 };
-  const int dropY[3] = { 31, 42, 31 };
+  // Approved humidity option 7: three outlined drops, centre raised.
+  // lv_line retains this pointer, so the closed outline must stay static.
+  static const lv_point_t dropOutline[] = {
+    {7, 0}, {6, 3}, {4, 6}, {2, 9}, {1, 11}, {0, 14}, {0, 16},
+    {1, 19}, {3, 21}, {5, 22}, {9, 22}, {11, 21}, {13, 19},
+    {14, 16}, {14, 14}, {13, 11}, {12, 9}, {10, 6}, {8, 3}, {7, 0}
+  };
+  const int dropX[3] = { 10, 27, 44 };
+  const int dropY[3] = { 32, 21, 32 };
   for (int di = 0; di < 3; ++di) {
-    lv_obj_t *drop = lv_obj_create(scrSaver);
+    lv_obj_t *drop = lv_line_create(scrSaver);
     lv_obj_remove_style_all(drop);
-    lv_obj_set_size(drop, 13, 18);
-    lv_obj_set_style_radius(drop, LV_RADIUS_CIRCLE, 0);
-    lv_obj_set_style_bg_opa(drop, LV_OPA_COVER, 0);
-    lv_obj_set_style_bg_color(drop, lv_color_hex(SAV_GREEN), 0);
+    lv_line_set_points(drop, dropOutline, sizeof(dropOutline) / sizeof(dropOutline[0]));
+    lv_obj_set_style_line_width(drop, 2, 0);
+    lv_obj_set_style_line_rounded(drop, true, 0);
+    lv_obj_set_style_line_color(drop, lv_color_hex(SAV_GREEN), 0);
+    lv_obj_clear_flag(drop, LV_OBJ_FLAG_CLICKABLE);
     lv_obj_align(drop, LV_ALIGN_TOP_LEFT, dropX[di], dropY[di]);
   }
 
+  // Match the humidity's font, colour, top margin and mirrored icon spacing.
+  // The saver has only its analog clock, with no duplicate digital time here.
   savTemp = lv_label_create(scrSaver);
   lv_label_set_text(savTemp, "--");
   lv_obj_set_style_text_font(savTemp, &lv_font_montserrat_48, 0);
   lv_obj_set_style_text_color(savTemp, lv_color_hex(SAV_GREEN), 0);
-  lv_obj_align(savTemp, LV_ALIGN_TOP_RIGHT, -54, 22);
+  lv_obj_align(savTemp, LV_ALIGN_TOP_RIGHT, -62, 22);
 
-  // Thermometer on the RIGHT side of the temperature, at the screen edge.
-  lv_obj_t *thermStem = lv_obj_create(scrSaver);
-  lv_obj_remove_style_all(thermStem);
-  lv_obj_set_size(thermStem, 10, 30);
-  lv_obj_set_style_radius(thermStem, 5, 0);
-  lv_obj_set_style_border_width(thermStem, 2, 0);
-  lv_obj_set_style_border_color(thermStem, lv_color_hex(SAV_GREEN), 0);
-  lv_obj_align(thermStem, LV_ALIGN_TOP_RIGHT, -18, 26);
+  lv_obj_t *stem = lv_obj_create(scrSaver);
+  lv_obj_remove_style_all(stem);
+  lv_obj_set_size(stem, 12, 38);
+  lv_obj_set_style_radius(stem, 6, 0);
+  lv_obj_set_style_border_width(stem, 3, 0);
+  lv_obj_set_style_border_color(stem, lv_color_hex(SAV_GREEN), 0);
+  lv_obj_align(stem, LV_ALIGN_TOP_RIGHT, -28, 22);
+  lv_obj_clear_flag(stem, LV_OBJ_FLAG_CLICKABLE | LV_OBJ_FLAG_SCROLLABLE);
 
-  lv_obj_t *thermBulb = lv_obj_create(scrSaver);
-  lv_obj_remove_style_all(thermBulb);
-  lv_obj_set_size(thermBulb, 18, 18);
-  lv_obj_set_style_radius(thermBulb, LV_RADIUS_CIRCLE, 0);
-  lv_obj_set_style_border_width(thermBulb, 2, 0);
-  lv_obj_set_style_border_color(thermBulb, lv_color_hex(SAV_GREEN), 0);
-  lv_obj_align(thermBulb, LV_ALIGN_TOP_RIGHT, -14, 50);
+  lv_obj_t *bulb = lv_obj_create(scrSaver);
+  lv_obj_remove_style_all(bulb);
+  lv_obj_set_size(bulb, 24, 24);
+  lv_obj_set_style_radius(bulb, LV_RADIUS_CIRCLE, 0);
+  lv_obj_set_style_bg_opa(bulb, LV_OPA_COVER, 0);
+  lv_obj_set_style_bg_color(bulb, lv_color_hex(SAV_GREEN), 0);
+  lv_obj_align(bulb, LV_ALIGN_TOP_RIGHT, -22, 48);
+  lv_obj_clear_flag(bulb, LV_OBJ_FLAG_CLICKABLE | LV_OBJ_FLAG_SCROLLABLE);
 
   savAlarmImg = lv_img_create(scrSaver);
   lv_img_set_src(savAlarmImg, &img_alarm_on);
@@ -4409,6 +5499,15 @@ static void buildSaver() {
   lv_obj_align(savAlarmImg, LV_ALIGN_BOTTOM_RIGHT, -22, -16);
   lv_obj_add_flag(savAlarmImg, LV_OBJ_FLAG_HIDDEN);
 
+  // Clock rings/markers are ordinary LVGL objects and used to eat presses.
+  // This transparent top object owns every wake press, including the centre.
+  lv_obj_t *wake = lv_obj_create(scrSaver);
+  lv_obj_remove_style_all(wake);
+  lv_obj_set_size(wake, SCREEN_W, SCREEN_H);
+  lv_obj_set_pos(wake, 0, 0);
+  lv_obj_clear_flag(wake, LV_OBJ_FLAG_SCROLLABLE);
+  lv_obj_add_flag(wake, LV_OBJ_FLAG_CLICKABLE);
+  lv_obj_add_event_cb(wake, saverExit, LV_EVENT_PRESSED, NULL);
   saverUpdate();
 }
 static void saverEnter() {
@@ -4418,6 +5517,7 @@ static void saverEnter() {
   saverOn = true;
   blBeforeSaver = backlight;
   saverUpdate();
+  persistentStatusSetVisible(false);
   lv_scr_load(scrSaver);
   applyBacklightQuiet(saverBright);
   Serial.println("[saver] in");
@@ -4488,6 +5588,8 @@ static void refreshAlarm() {
 }
 
 static void startRinging() {
+  alarmAudioOwned = queueAlarmAudio(1);
+  alarmRadioUi(true);
   ringing       = true;
   ringStart     = millis();
   lastRingPulse = 0;
@@ -4512,6 +5614,8 @@ static void startRinging() {
 }
 
 static void stopRinging() {
+  stopAlarmAudio();
+  if (hapReady && hapTimer) hapTick(hapTimer);
   ringing = false;
   alarmIconShake(false);      // put the bells back straight
   refreshAlarm();
@@ -4519,6 +5623,8 @@ static void stopRinging() {
 }
 
 static void evAlarmSnooze(lv_event_t *e) {
+  stopAlarmAudio();
+  if (hapReady && hapTimer) hapTick(hapTimer);
   ringing     = false;
   alarmIconShake(false);
   int base    = now.hour * 60 + now.min;
@@ -4543,19 +5649,47 @@ static void evAlarmRepeat(lv_event_t *e) {
   Serial.printf("[alarm] %s\n", alarmOnce ? "once" : "every day");
 }
 
-static void evAlarmSwitch(lv_event_t *e) {
-  alarmOn = lv_obj_has_state(lv_event_get_target(e), LV_STATE_CHECKED);
+static void setAlarmArmed(bool on) {
+  alarmOn = on;
+  if (swAlarm) {
+    if (on) lv_obj_add_state(swAlarm, LV_STATE_CHECKED);
+    else lv_obj_clear_state(swAlarm, LV_STATE_CHECKED);
+    toggleFace(swAlarm);
+  }
   cfgTouched();
-  if (!alarmOn) { snoozeUntil = -1; ringing = false; }
+  if (!alarmOn) { snoozeUntil = -1; stopRinging(); }
   refreshAlarm();
   Serial.printf("[alarm] %s\n", alarmOn ? "armed" : "off");
+}
+
+
+
+static void evAlarmSwitch(lv_event_t *e) {
+  setAlarmArmed(lv_obj_has_state(lv_event_get_target(e), LV_STATE_CHECKED));
+}
+
+// Reuse detail-screen state transitions and existing command ownership.
+// UI-only devices remain UI-only; this adds no hardware protocol.
+static void homeTogglePower(uint8_t device) {
+  switch (device) {
+    case 0: setMassagePower(!bedRunning); refreshHomeTiles(); break;
+    case 1: evRadioPower(nullptr); break;
+    case 2: acSetPower(!acPower); break;
+    case 3: setFanPower(!fanOn); break;
+    case 4: setLampPower(!lampOn); break;
+    case 5: toggleShadePower(); break;
+    case 6: setAlarmArmed(!(alarmOn || ringing || snoozeUntil >= 0)); break;
+  }
 }
 
 // Once a second, from sensorTick.
 static void alarmTick() {
   // A clock that was never set returns a meaningless number, and an
   // alarm against it fires at random. Same check the display uses.
-  if (!now.valid || now.wasStopped) { ringing = false; return; }
+  if (!now.valid || now.wasStopped) {
+    if (ringing || alarmAudioOwned) stopRinging();
+    return;
+  }
 
   int mod = now.hour * 60 + now.min;
 
@@ -4591,26 +5725,26 @@ static void buildAlarm() {
   navBack(scrAlarm, "Alarm");
 
   swAlarm = makeToggle(scrAlarm, evAlarmSwitch, alarmOn);
-  lv_obj_align(swAlarm, LV_ALIGN_TOP_RIGHT, -28, 14);
+  lv_obj_align(swAlarm, LV_ALIGN_TOP_RIGHT, -28, 84);
 
   lv_obj_t *swCap = lv_label_create(scrAlarm);
   lv_label_set_text(swCap, "Alarm");
   lv_obj_set_style_text_font(swCap, &lv_font_montserrat_16, 0);
   lv_obj_set_style_text_color(swCap, lv_color_hex(0x8A94A0), 0);
-  lv_obj_align(swCap, LV_ALIGN_TOP_RIGHT, -252, 36);
+  lv_obj_align(swCap, LV_ALIGN_TOP_RIGHT, -252, 106);
 
   // Added in TEST 034 and never actually built: that edit targeted a
   // label removed in TEST 030, found nothing, and changed nothing.
   // The flag and its EEPROM byte were there the whole time; only the
   // control was missing.
   swRepeat = makeToggle(scrAlarm, evAlarmRepeat, !alarmOnce);
-  lv_obj_align(swRepeat, LV_ALIGN_TOP_RIGHT, -28, 92);
+  lv_obj_align(swRepeat, LV_ALIGN_TOP_RIGHT, -28, 162);
 
   lv_obj_t *rcap = lv_label_create(scrAlarm);
   lv_label_set_text(rcap, "Every day");
   lv_obj_set_style_text_font(rcap, &lv_font_montserrat_16, 0);
   lv_obj_set_style_text_color(rcap, lv_color_hex(0x8A94A0), 0);
-  lv_obj_align(rcap, LV_ALIGN_TOP_RIGHT, -252, 114);
+  lv_obj_align(rcap, LV_ALIGN_TOP_RIGHT, -252, 184);
 
   // Absolute positions, not a flex row: a flex row lays its
   // children out in a line and cannot put a heading over one of its
@@ -4662,9 +5796,8 @@ static void buildAlarm() {
 
   lv_obj_t *note = lv_label_create(scrAlarm);
   lv_label_set_text(note,
-    "It rings by pulsing the panel motor. A motor on the headboard is\n"
-    "a weak alarm and may not wake you. The mattress motors over\n"
-    "RS-485 are the real answer, and give each side its own.");
+    "Radio alarm with local panel vibration.\n"
+    "Stop ends the alarm. Snooze restarts it in 9 minutes.");
   lv_obj_set_style_text_font(note, &lv_font_montserrat_14, 0);
   lv_obj_set_style_text_color(note, lv_color_hex(0x66707E), 0);
   lv_obj_align(note, LV_ALIGN_BOTTOM_MID, 0, -130);
@@ -4674,6 +5807,81 @@ static void buildAlarm() {
 
 // ------------------------------------------------------------
 
+// Clock settings layout 3
+// Two direct editing cards: a wider Date card leaves room for a four-digit
+// year. Hebrew literals are pre-reversed because this LVGL build has BIDI off.
+static lv_obj_t *clockLabel(lv_obj_t *parent, const char *text,
+                            const lv_font_t *font, int x, int y, int w, int h,
+                            uint32_t color) {
+  lv_obj_t *label = lv_label_create(parent);
+  lv_label_set_text(label, text);
+  lv_obj_set_pos(label, x, y);
+  lv_obj_set_size(label, w, h);
+  lv_label_set_long_mode(label, LV_LABEL_LONG_CLIP);
+  lv_obj_set_style_text_font(label, font, 0);
+  lv_obj_set_style_text_color(label, lv_color_hex(color), 0);
+  lv_obj_set_style_text_align(label, LV_TEXT_ALIGN_CENTER, 0);
+  lv_obj_clear_flag(label, LV_OBJ_FLAG_CLICKABLE);
+  return label;
+}
+
+static lv_obj_t *clockButton(lv_obj_t *parent, int x, int y, int w, int h,
+                             const char *text, lv_event_cb_t cb, uint32_t color,
+                             const lv_font_t *font) {
+  lv_obj_t *button = setBtn(parent, w, h, text, cb, color);
+  lv_obj_set_pos(button, x, y);
+  lv_obj_set_style_pad_all(button, 0, 0);
+  lv_obj_set_style_radius(button, 12, 0);
+  lv_obj_set_style_shadow_width(button, 0, 0);
+  lv_obj_set_style_text_font(lv_obj_get_child(button, 0), font, 0);
+  return button;
+}
+
+static lv_obj_t *clockCard(lv_obj_t *parent, int x, int w,
+                           const char *title, uint32_t color) {
+  lv_obj_t *card = lv_obj_create(parent);
+  lv_obj_set_pos(card, x, 42);
+  lv_obj_set_size(card, w, 320);
+  lv_obj_set_style_pad_all(card, 0, 0);
+  lv_obj_set_style_border_width(card, 0, 0);
+  lv_obj_set_style_radius(card, 16, 0);
+  lv_obj_set_style_bg_color(card, lv_color_hex(color), 0);
+  lv_obj_clear_flag(card, LV_OBJ_FLAG_SCROLLABLE | LV_OBJ_FLAG_CLICKABLE);
+  lv_obj_add_flag(card, LV_OBJ_FLAG_EVENT_BUBBLE);
+  clockLabel(card, title, &font_clock_28, 0, 2, w, 34, 0xFFFFFF);
+  return card;
+}
+
+static void buildClockSettings(lv_obj_t *parent) {
+  lv_obj_set_style_pad_all(parent, 12, 0);
+  lv_obj_set_style_border_width(parent, 0, 0);
+  // Values stay above the finger and the two rows of direct adjustment.
+  lv_obj_t *timeCard = clockCard(parent, 180, 320, "", 0x20354B);
+  lv_obj_t *dateCard = clockCard(parent, 524, 452, "", 0x173D39);
+  lv_obj_set_y(timeCard,20); lv_obj_set_y(dateCard,20);
+  lv_obj_set_height(timeCard,310); lv_obj_set_height(dateCard,310);
+  lv_event_cb_t up[5]={evSetHUp,evSetMiUp,evSetDUp,evSetMoUp,evSetYUp};
+  lv_event_cb_t dn[5]={evSetHDn,evSetMiDn,evSetDDn,evSetMoDn,evSetYDn};
+  lv_obj_t **values[5]={&lblSetH,&lblSetMi,&lblSetD,&lblSetMo,&lblSetY};
+  for(int i=0;i<5;++i) {
+    lv_obj_t *card=i<2?timeCard:dateCard;
+    int x=i<2?12+i*154:12+(i-2)*146;
+    int w=i<2?142:134;
+    *values[i]=clockLabel(card,"00",&font_clock_40,x,18,w,54,0xFFFFFF);
+    clockButton(card,x,96,w,86,"+",up[i],i<2?0x285E94:0x216C61,&font_clock_40);
+    clockButton(card,x,198,w,86,"-",dn[i],i<2?0x285E94:0x216C61,&font_clock_40);
+  }
+  clockLabel(timeCard,":",&font_clock_40,148,18,24,54,0xFFFFFF);
+  // A rectangular two-position selector in the left rail.
+  btnAM=clockButton(parent,0,42,80,78,"AM",evAM,0x2A3040,&font_clock_28);
+  btnPM=clockButton(parent,80,42,80,78,"PM",evPM,0x2A3040,&font_clock_28);
+  lv_obj_set_style_radius(btnAM,4,0);lv_obj_set_style_radius(btnPM,4,0);
+  lblSetStatus=clockLabel(parent,"",&font_clock_28,180,354,796,64,0xE0E6EE);
+  clockButton(parent,0,354,160,76,"Done",evDoSetTime,SET_GREEN,&font_clock_28);
+  refreshSetLabels();refreshAmPmButtons();
+}
+// End Clock settings layout 3
+
 static void buildSettings() {
   scrSettings = lv_obj_create(NULL);
   lv_obj_set_style_bg_color(scrSettings, lv_color_hex(0x0D0F16), 0);
@@ -4682,16 +5890,16 @@ static void buildSettings() {
   lv_obj_add_event_cb(scrSettings, evSettingsShown,
                       LV_EVENT_SCREEN_LOAD_START, NULL);
 
-  lv_obj_t *back = setBtn(scrSettings, 56, 56, "<", evGoHome, BACK_COL);
+  lv_obj_add_event_cb(scrSettings, evScreenAccessibility, LV_EVENT_SCREEN_LOADED, NULL);
+  lv_obj_t *back = setBtn(scrSettings, 64, 64, "<", evGoHome, BACK_COL);
   lv_obj_align(back, LV_ALIGN_TOP_LEFT, 14, 8);
 
   lv_obj_t *ttl = lv_label_create(scrSettings);
   lv_label_set_text(ttl, "Settings");
   lv_obj_set_style_text_font(ttl, &lv_font_montserrat_26, 0);
   lv_obj_set_style_text_color(ttl, lv_color_hex(SET_TEXT), 0);
-  lv_obj_align(ttl, LV_ALIGN_TOP_MID, 0, 20);
-
-  lv_obj_t *tv = lv_tabview_create(scrSettings, LV_DIR_TOP, 52);
+  lv_obj_align(ttl, LV_ALIGN_TOP_LEFT, 96, 20);
+  lv_obj_t *tv = lv_tabview_create(scrSettings, LV_DIR_TOP, 64);
   lv_obj_set_size(tv, SCREEN_W, SCREEN_H - 72);
   lv_obj_align(tv, LV_ALIGN_BOTTOM_MID, 0, 0);
 
@@ -4705,7 +5913,7 @@ static void buildSettings() {
   lv_obj_set_style_bg_color(bar, lv_color_hex(SET_BAR_BG), 0);
   lv_obj_set_style_bg_opa(bar, LV_OPA_COVER, 0);
   lv_obj_set_style_text_color(bar, lv_color_hex(SET_DIM), 0);
-  lv_obj_set_style_text_font(bar, &lv_font_montserrat_16, 0);
+  lv_obj_set_style_text_font(bar, &lv_font_montserrat_26, 0);
   // LVGL declares LV_PART_* and LV_STATE_* as two separate anonymous
   // enums, and this toolchain deprecates OR-ing across enum types.
   // Cast to what the function actually takes.
@@ -4716,12 +5924,25 @@ static void buildSettings() {
   lv_obj_set_style_bg_color(bar, lv_color_hex(SET_PAGE_BG), ITEM_CHECKED);
   lv_obj_set_style_bg_opa(bar, LV_OPA_COVER, ITEM_CHECKED);
 
+  // Radio is a peer of Clock, Display and Touch; one tap opens its editor.
+  lv_obj_set_width(bar, 768);
+  lv_obj_t *radioSettingsEntry = setBtn(scrSettings, 256, 64, "Radio",
+                                      radioSettingsOpen, SET_BAR_BG);
+  lv_obj_set_pos(radioSettingsEntry, 768, 72);
+  lv_obj_set_style_radius(radioSettingsEntry, 0, 0);
+
+  #if PANEL_ID == 1
   lv_obj_t *tClock = lv_tabview_add_tab(tv, "Clock");
+#endif
   lv_obj_t *tDisp  = lv_tabview_add_tab(tv, "Display");
   lv_obj_t *tTouch = lv_tabview_add_tab(tv, "Touch");
 
-  lv_obj_t *pages[3] = { tClock, tDisp, tTouch };
-  for (int i = 0; i < 3; i++) {
+  lv_obj_t *pages[] = {
+#if PANEL_ID == 1
+    tClock,
+#endif
+    tDisp,tTouch };
+  for (unsigned i = 0; i < sizeof(pages)/sizeof(pages[0]); i++) {
     lv_obj_set_style_bg_color(pages[i], lv_color_hex(SET_PAGE_BG), 0);
     lv_obj_set_style_bg_opa(pages[i], LV_OPA_COVER, 0);
     lv_obj_set_style_text_color(pages[i], lv_color_hex(SET_TEXT), 0);
@@ -4733,269 +5954,119 @@ static void buildSettings() {
 
   // ---------------- Clock ----------------
 
-  lblNowTime = lv_label_create(tClock);
-  lv_label_set_text(lblNowTime, "--:--:--");
-  lv_obj_set_style_text_font(lblNowTime, &lv_font_montserrat_26, 0);
-  lv_obj_set_style_text_color(lblNowTime, lv_color_hex(SET_DIM), 0);
-  lv_obj_align(lblNowTime, LV_ALIGN_TOP_MID, 0, 4);
+  #if PANEL_ID == 1
+  buildClockSettings(tClock);
+  #endif
 
-  // Every plus/minus group carries its TITLE ABOVE IT - Hour,
-  // Minute, Day, Month, Year - brighter and larger than the old
-  // small grey captions that used to trail the year row. Absolute
-  // positions, because a flex row cannot put a heading over its own
-  // column.
-  {
-    struct Col { const char *cap; int x; int w; };
-    // time row: [-] 76, value 96, [+] 76 with 8 px gaps -> 264 wide
-    static const Col tc[2] = { { "Hour", 150, 264 }, { "Minute", 470, 264 } };
-    lv_event_cb_t tdn[2] = { evSetHDn, evSetMiDn };
-    lv_event_cb_t tup[2] = { evSetHUp, evSetMiUp };
-    lv_obj_t **tlb[2] = { &lblSetH, &lblSetMi };
-    for (int i = 0; i < 2; i++) {
-      lv_obj_t *cap = lv_label_create(tClock);
-      lv_label_set_text(cap, tc[i].cap);
-      lv_obj_set_style_text_font(cap, &lv_font_montserrat_16, 0);
-      lv_obj_set_style_text_color(cap, lv_color_hex(0xD8DEE8), 0);
-      lv_obj_align(cap, LV_ALIGN_TOP_LEFT, tc[i].x + tc[i].w / 2 - 24, 40);
+  // Short, readable controls use both halves of the screen.
+  lv_obj_set_style_pad_all(tDisp,12,0);lv_obj_set_style_pad_all(tTouch,12,0);
+  auto labelAt=[](lv_obj_t *p,const char *text,int x,int y,int w)->lv_obj_t* {
+    lv_obj_t *l=lv_label_create(p);lv_label_set_text(l,text);
+    lv_obj_set_style_text_font(l,&lv_font_montserrat_26,0);
+    lv_obj_set_style_text_color(l,lv_color_hex(SET_TEXT),0);
+    lv_obj_set_width(l,w);lv_obj_set_pos(l,x,y);return l;
+  };
+  auto sliderAt=[](lv_obj_t *p,int x,int y,int lo,int hi,int value,lv_event_cb_t cb)->lv_obj_t* {
+    lv_obj_t *sl=lv_slider_create(p);lv_obj_set_size(sl,300,30);lv_obj_set_pos(sl,x,y);
+    lv_slider_set_range(sl,lo,hi);lv_slider_set_value(sl,value,LV_ANIM_OFF);
+    lv_obj_add_event_cb(sl,cb,LV_EVENT_VALUE_CHANGED,NULL);return sl;
+  };
+  labelAt(tDisp,"Auto brightness",20,10,300);
+  swAuto=makeToggle(tDisp,evAutoBright,autoBright);lv_obj_set_pos(swAuto,260,0);
+  labelAt(tDisp,"Screensaver",520,10,400);
+  labelAt(tDisp,"Minimum",20,78,280);
+  sldBlMin=sliderAt(tDisp,32,124,1,100,blMin,evBlMin);
+  lblBlMin=labelAt(tDisp,"",364,106,110);lv_label_set_text_fmt(lblBlMin,"%u%%",blMin);
+  labelAt(tDisp,"Maximum / manual",20,180,400);
+  sldBlMax=sliderAt(tDisp,32,226,1,100,blMax,evBlMax);
+  lblBlMax=labelAt(tDisp,"",364,208,110);lv_label_set_text_fmt(lblBlMax,"%u%%",blMax);
+  labelAt(tDisp,"Response speed",20,282,360);
+  sldSpeed=sliderAt(tDisp,32,328,AUTO_SPEED_MIN,AUTO_SPEED_MAX,autoSpeed,evAutoSpeed);
+  lblAutoSpeed=labelAt(tDisp,"",364,310,110);lv_label_set_text_fmt(lblAutoSpeed,"%u",autoSpeed);
+  labelAt(tDisp,"Start after",520,78,280);
+  sldSaverAfter=sliderAt(tDisp,532,124,0,8,saverIdx,evSaverAfter);
+  lblSaverAfter=labelAt(tDisp,kSaverNames[saverIdx],850,106,126);
+  labelAt(tDisp,"Brightness",520,180,280);
+  sldSaverBright=sliderAt(tDisp,532,226,1,60,saverBright,evSaverBright);
+  lblSaverBright=labelAt(tDisp,"",850,208,126);lv_label_set_text_fmt(lblSaverBright,"%u%%",saverBright);
+  lblLuxLive=labelAt(tDisp,"room light -- lx",520,302,450);
+  labelAt(tDisp,"Backlight now",520,370,300);
+  lblBlVal=labelAt(tDisp,"",850,370,126);lv_label_set_text_fmt(lblBlVal,"%u%%",backlight);
 
-      lv_obj_t *dn = setBtn(tClock, 76, 72, "-", tdn[i], 0x2A3040);
-      lv_obj_align(dn, LV_ALIGN_TOP_LEFT, tc[i].x, 66);
-      *tlb[i] = setBigLabel(tClock, "--");
-      lv_obj_align(*tlb[i], LV_ALIGN_TOP_LEFT, tc[i].x + 100, 84);
-      lv_obj_t *up = setBtn(tClock, 76, 72, "+", tup[i], 0x2A3040);
-      lv_obj_align(up, LV_ALIGN_TOP_LEFT, tc[i].x + 188, 66);
-    }
-    lv_obj_t *colon = setBigLabel(tClock, ":");
-    lv_obj_align(colon, LV_ALIGN_TOP_LEFT, 432, 84);
+  labelAt(tTouch,"Touch feedback",20,16,480);
+  labelAt(tTouch,"Strength",20,94,400);
+  sldHapV=sliderAt(tTouch,32,152,0,100,hapDutyPct,evHapVChg);
+  lv_obj_add_event_cb(sldHapV,evHapTry,LV_EVENT_RELEASED,NULL);
+  lblHapV=labelAt(tTouch,"",364,134,110);lv_label_set_text_fmt(lblHapV,"%u%%",hapDutyPct);
+  labelAt(tTouch,"Duration",520,94,400);
+  sldHapH=sliderAt(tTouch,532,152,20,500,hapLenMs,evHapHChg);
+  lv_obj_add_event_cb(sldHapH,evHapTry,LV_EVENT_RELEASED,NULL);
+  lblHapH=labelAt(tTouch,"",850,134,126);lv_label_set_text_fmt(lblHapH,"%u ms",hapLenMs);
+  lv_obj_t *tb=setBtn(tTouch,340,96,"Try touch",evHapTry,0x1F5A8A);
+  lv_obj_set_pos(tb,318,246);
+  labelAt(tTouch,"Release the slider to feel the change.",190,378,700);
 
-    // date row: [-] 64, value 88, [+] 64 -> 232 wide
-    static const Col dc[3] = { { "Day", 90, 232 }, { "Month", 396, 232 },
-                               { "Year", 702, 232 } };
-    lv_event_cb_t ddn[3] = { evSetDDn, evSetMoDn, evSetYDn };
-    lv_event_cb_t dup[3] = { evSetDUp, evSetMoUp, evSetYUp };
-    lv_obj_t **dlb[3] = { &lblSetD, &lblSetMo, &lblSetY };
-    for (int i = 0; i < 3; i++) {
-      lv_obj_t *cap = lv_label_create(tClock);
-      lv_label_set_text(cap, dc[i].cap);
-      lv_obj_set_style_text_font(cap, &lv_font_montserrat_16, 0);
-      lv_obj_set_style_text_color(cap, lv_color_hex(0xD8DEE8), 0);
-      lv_obj_align(cap, LV_ALIGN_TOP_LEFT, dc[i].x + dc[i].w / 2 - 24, 160);
-
-      lv_obj_t *dn = setBtn(tClock, 64, 66, "-", ddn[i], 0x2A3040);
-      lv_obj_align(dn, LV_ALIGN_TOP_LEFT, dc[i].x, 186);
-      *dlb[i] = setBigLabel(tClock, "--");
-      lv_obj_align(*dlb[i], LV_ALIGN_TOP_LEFT, dc[i].x + 84, 202);
-      lv_obj_t *up = setBtn(tClock, 64, 66, "+", dup[i], 0x2A3040);
-      lv_obj_align(up, LV_ALIGN_TOP_LEFT, dc[i].x + 168, 186);
-    }
-  }
-
-  // My big TEST 050 edit swallowed this button along with the flex
-  // rows it replaced - caught by the after-check, restored here.
-  lv_obj_t *sb = setBtn(tClock, 360, 72, "Set time and date",
-                        evDoSetTime, SET_GREEN);
-  lv_obj_align(sb, LV_ALIGN_TOP_MID, 0, 282);
-
-  // The 12 hour switch lives at the BOTTOM now, caption under it.
-  sw12h = makeToggle(tClock, ev12h, use12h);
-  lv_obj_align(sw12h, LV_ALIGN_BOTTOM_RIGHT, -28, -46);
-
-  lv_obj_t *c12 = lv_label_create(tClock);
-  lv_label_set_text(c12, "12 hour (AM / PM)");
-  lv_obj_set_style_text_font(c12, &lv_font_montserrat_16, 0);
-  lv_obj_set_style_text_color(c12, lv_color_hex(0xD8DEE8), 0);
-  lv_obj_align(c12, LV_ALIGN_BOTTOM_RIGHT, -50, -14);
-
-  lblSetStatus = lv_label_create(tClock);
-  lv_label_set_text(lblSetStatus, "");
-  lv_obj_set_style_text_font(lblSetStatus, &lv_font_montserrat_16, 0);
-  lv_obj_align(lblSetStatus, LV_ALIGN_TOP_MID, 0, 352);
-
-  // ---------------- Display ----------------
-
-  swAuto = makeToggle(tDisp, evAutoBright, autoBright);
-  lv_obj_align(swAuto, LV_ALIGN_TOP_RIGHT, -28, 10);
-
-  // Under the switch, not beside it, and named for what it does.
-  lv_obj_t *au = lv_label_create(tDisp);
-  lv_label_set_text(au, "Auto brightness");
-  lv_obj_set_style_text_font(au, &lv_font_montserrat_16, 0);
-  lv_obj_set_style_text_color(au, lv_color_hex(0xD8DEE8), 0);
-  lv_obj_align(au, LV_ALIGN_TOP_RIGHT, -60, 82);
-
-  lv_obj_t *mn = lv_label_create(tDisp);
-  lv_label_set_text(mn, "Darkest  (in a dark room)");
-  lv_obj_set_style_text_font(mn, &lv_font_montserrat_16, 0);
-  lv_obj_align(mn, LV_ALIGN_TOP_LEFT, 28, 18);
-
-  sldBlMin = lv_slider_create(tDisp);
-  lv_obj_set_size(sldBlMin, 700, 26);
-  lv_slider_set_range(sldBlMin, 1, 100);
-  lv_slider_set_value(sldBlMin, blMin, LV_ANIM_OFF);
-  lv_obj_align(sldBlMin, LV_ALIGN_TOP_LEFT, 28, 46);
-  lv_obj_add_event_cb(sldBlMin, evBlMin, LV_EVENT_VALUE_CHANGED, NULL);
-
-  lblBlMin = lv_label_create(tDisp);
-  lv_label_set_text_fmt(lblBlMin, "%u%%", blMin);
-  lv_obj_set_style_text_font(lblBlMin, &lv_font_montserrat_26, 0);
-  lv_obj_set_style_text_color(lblBlMin, lv_color_hex(SET_TEXT), 0);
-  lv_obj_align(lblBlMin, LV_ALIGN_TOP_LEFT, 620, 38);
-
-  lv_obj_t *mx = lv_label_create(tDisp);
-  lv_label_set_text(mx, "Brightest  (also the manual level when Auto is off)");
-  lv_obj_set_style_text_font(mx, &lv_font_montserrat_16, 0);
-  lv_obj_align(mx, LV_ALIGN_TOP_LEFT, 28, 94);
-
-  sldBlMax = lv_slider_create(tDisp);
-  lv_obj_set_size(sldBlMax, 700, 26);
-  lv_slider_set_range(sldBlMax, 1, 100);
-  lv_slider_set_value(sldBlMax, blMax, LV_ANIM_OFF);
-  lv_obj_align(sldBlMax, LV_ALIGN_TOP_LEFT, 28, 122);
-  lv_obj_add_event_cb(sldBlMax, evBlMax, LV_EVENT_VALUE_CHANGED, NULL);
-
-  lblBlMax = lv_label_create(tDisp);
-  lv_label_set_text_fmt(lblBlMax, "%u%%", blMax);
-  lv_obj_set_style_text_font(lblBlMax, &lv_font_montserrat_26, 0);
-  lv_obj_set_style_text_color(lblBlMax, lv_color_hex(SET_TEXT), 0);
-  lv_obj_align(lblBlMax, LV_ALIGN_TOP_LEFT, 620, 114);
-
-  lv_obj_t *sp = lv_label_create(tDisp);
-  lv_label_set_text(sp, "Auto brightness - response speed  (1 gentle, 10 immediate)");
-  lv_obj_set_style_text_font(sp, &lv_font_montserrat_16, 0);
-  lv_obj_align(sp, LV_ALIGN_TOP_LEFT, 28, 170);
-
-  sldSpeed = lv_slider_create(tDisp);
-  lv_obj_set_size(sldSpeed, 700, 26);
-  lv_slider_set_range(sldSpeed, AUTO_SPEED_MIN, AUTO_SPEED_MAX);
-  lv_slider_set_value(sldSpeed, autoSpeed, LV_ANIM_OFF);
-  lv_obj_align(sldSpeed, LV_ALIGN_TOP_LEFT, 28, 198);
-  lv_obj_add_event_cb(sldSpeed, evAutoSpeed, LV_EVENT_VALUE_CHANGED, NULL);
-
-  lblAutoSpeed = lv_label_create(tDisp);
-  lv_label_set_text_fmt(lblAutoSpeed, "%u", autoSpeed);
-  lv_obj_set_style_text_font(lblAutoSpeed, &lv_font_montserrat_26, 0);
-  lv_obj_set_style_text_color(lblAutoSpeed, lv_color_hex(SET_TEXT), 0);
-  lv_obj_align(lblAutoSpeed, LV_ALIGN_TOP_LEFT, 620, 190);
-
-  lv_obj_t *sv = lv_label_create(tDisp);
-  lv_label_set_text(sv, "Screensaver after");
-  lv_obj_set_style_text_font(sv, &lv_font_montserrat_16, 0);
-  lv_obj_align(sv, LV_ALIGN_TOP_LEFT, 28, 246);
-
-  sldSaverAfter = lv_slider_create(tDisp);
-  lv_obj_set_size(sldSaverAfter, 560, 26);
-  lv_slider_set_range(sldSaverAfter, 0, 8);
-  lv_slider_set_value(sldSaverAfter, saverIdx, LV_ANIM_OFF);
-  lv_obj_align(sldSaverAfter, LV_ALIGN_TOP_LEFT, 28, 274);
-  lv_obj_add_event_cb(sldSaverAfter, evSaverAfter, LV_EVENT_VALUE_CHANGED, NULL);
-
-  lblSaverAfter = lv_label_create(tDisp);
-  lv_label_set_text(lblSaverAfter, kSaverNames[saverIdx]);
-  lv_obj_set_style_text_font(lblSaverAfter, &lv_font_montserrat_26, 0);
-  lv_obj_set_style_text_color(lblSaverAfter, lv_color_hex(SET_TEXT), 0);
-  lv_obj_align(lblSaverAfter, LV_ALIGN_TOP_LEFT, 620, 266);
-
-  // Was also called sb, which collided with the Set time button in
-  // the Clock tab - same function, same scope.
-  lv_obj_t *sbCap = lv_label_create(tDisp);
-  lv_label_set_text(sbCap, "Screensaver brightness");
-  lv_obj_set_style_text_font(sbCap, &lv_font_montserrat_16, 0);
-  lv_obj_align(sbCap, LV_ALIGN_TOP_LEFT, 28, 322);
-
-  sldSaverBright = lv_slider_create(tDisp);
-  lv_obj_set_size(sldSaverBright, 560, 26);
-  lv_slider_set_range(sldSaverBright, 1, 60);
-  lv_slider_set_value(sldSaverBright, saverBright, LV_ANIM_OFF);
-  lv_obj_align(sldSaverBright, LV_ALIGN_TOP_LEFT, 28, 350);
-  lv_obj_add_event_cb(sldSaverBright, evSaverBright, LV_EVENT_VALUE_CHANGED, NULL);
-
-  lblSaverBright = lv_label_create(tDisp);
-  lv_label_set_text_fmt(lblSaverBright, "%u%%", saverBright);
-  lv_obj_set_style_text_font(lblSaverBright, &lv_font_montserrat_26, 0);
-  lv_obj_set_style_text_color(lblSaverBright, lv_color_hex(SET_TEXT), 0);
-  lv_obj_align(lblSaverBright, LV_ALIGN_TOP_LEFT, 620, 342);
-
-  lblLuxLive = lv_label_create(tDisp);
-  lv_label_set_text(lblLuxLive, "room light  -- lx");
-  lv_obj_set_style_text_font(lblLuxLive, &lv_font_montserrat_26, 0);
-  lv_obj_set_style_text_color(lblLuxLive, lv_color_hex(0x60D0FF), 0);
-  lv_obj_align(lblLuxLive, LV_ALIGN_TOP_LEFT, 28, 404);
-
-  lv_obj_t *nowCap = lv_label_create(tDisp);
-  lv_label_set_text(nowCap, "backlight now");
-  lv_obj_set_style_text_font(nowCap, &lv_font_montserrat_16, 0);
-  lv_obj_set_style_text_color(nowCap, lv_color_hex(SET_DIM), 0);
-  lv_obj_align(nowCap, LV_ALIGN_TOP_LEFT, 500, 398);
-
-  lblBlVal = lv_label_create(tDisp);
-  lv_label_set_text_fmt(lblBlVal, "%u%%", backlight);
-  lv_obj_set_style_text_font(lblBlVal, &lv_font_montserrat_26, 0);
-  lv_obj_set_style_text_color(lblBlVal, lv_color_hex(SET_TEXT), 0);
-  lv_obj_align(lblBlVal, LV_ALIGN_TOP_LEFT, 500, 424);
-
-  // ---------------- Touch ----------------
-
-  lv_obj_t *hv = lv_label_create(tTouch);
-  lv_label_set_text(hv, "Pulse strength");
-  lv_obj_set_style_text_font(hv, &lv_font_montserrat_16, 0);
-  lv_obj_align(hv, LV_ALIGN_TOP_LEFT, 28, 26);
-
-  sldHapV = lv_slider_create(tTouch);
-  lv_obj_set_size(sldHapV, 740, 26);
-  lv_slider_set_range(sldHapV, 0, 100);
-  lv_slider_set_value(sldHapV, hapDutyPct, LV_ANIM_OFF);
-  lv_obj_align(sldHapV, LV_ALIGN_TOP_LEFT, 28, 66);
-  lv_obj_add_event_cb(sldHapV, evHapVChg, LV_EVENT_VALUE_CHANGED, NULL);
-  lv_obj_add_event_cb(sldHapV, evHapTry,  LV_EVENT_RELEASED,      NULL);
-
-  lblHapV = lv_label_create(tTouch);
-  lv_label_set_text_fmt(lblHapV, "%u%%", hapDutyPct);
-  lv_obj_set_style_text_font(lblHapV, &lv_font_montserrat_26, 0);
-  lv_obj_set_style_text_color(lblHapV, lv_color_hex(SET_TEXT), 0);
-  lv_obj_align(lblHapV, LV_ALIGN_TOP_LEFT, 800, 56);
-
-  lv_obj_t *hh = lv_label_create(tTouch);
-  lv_label_set_text(hh, "Pulse length");
-  lv_obj_set_style_text_font(hh, &lv_font_montserrat_16, 0);
-  lv_obj_align(hh, LV_ALIGN_TOP_LEFT, 28, 130);
-
-  sldHapH = lv_slider_create(tTouch);
-  lv_obj_set_size(sldHapH, 740, 26);
-  lv_slider_set_range(sldHapH, 20, 500);
-  lv_slider_set_value(sldHapH, hapLenMs, LV_ANIM_OFF);
-  lv_obj_align(sldHapH, LV_ALIGN_TOP_LEFT, 28, 170);
-  lv_obj_add_event_cb(sldHapH, evHapHChg, LV_EVENT_VALUE_CHANGED, NULL);
-  lv_obj_add_event_cb(sldHapH, evHapTry,  LV_EVENT_RELEASED,      NULL);
-
-  lblHapH = lv_label_create(tTouch);
-  lv_label_set_text_fmt(lblHapH, "%u ms", hapLenMs);
-  lv_obj_set_style_text_font(lblHapH, &lv_font_montserrat_26, 0);
-  lv_obj_set_style_text_color(lblHapH, lv_color_hex(SET_TEXT), 0);
-  lv_obj_align(lblHapH, LV_ALIGN_TOP_LEFT, 800, 160);
-
-  lv_obj_t *tb = setBtn(tTouch, 260, 68, "Try it", evHapTry, 0x1F5A8A);
-  lv_obj_align(tb, LV_ALIGN_TOP_LEFT, 28, 240);
-
-  lv_obj_t *thint = lv_label_create(tTouch);
-  lv_label_set_text(thint,
-    "The number follows your finger; the buzz waits for you to lift it.\n"
-    "Below about 40 ms the motor has not spun up and there is little\n"
-    "to feel. Both are kept in the clock module's EEPROM, so they\n"
-    "survive a reflash.");
-  lv_obj_set_style_text_font(thint, &lv_font_montserrat_16, 0);
-  lv_obj_set_style_text_color(thint, lv_color_hex(SET_DIM), 0);
-  lv_obj_align(thint, LV_ALIGN_TOP_LEFT, 28, 330);
-
-  lv_obj_t *hint = lv_label_create(tDisp);
-  lv_label_set_text(hint,
-    "If the brightness pumps up and down on its own, the sensor can "
-    "see the screen - move the sensor, not the numbers.");
-  lv_obj_set_style_text_font(hint, &lv_font_montserrat_16, 0);
-  lv_obj_set_style_text_color(hint, lv_color_hex(SET_DIM), 0);
-  lv_obj_align(hint, LV_ALIGN_BOTTOM_LEFT, 28, -8);
 }
 
 // ------------------------------------------------------------
+
+// The panel owner's name is the Settings entrance. The visible name stays
+// small, with a generous button and the same one-second hold as the tiles; a short tap also opens Settings.
+static lv_obj_t *buildHomeSettingsEntry(lv_obj_t *parent) {
+  lv_obj_t *entry = lv_btn_create(parent);
+  lv_obj_remove_style_all(entry);
+  lv_obj_set_pos(entry, 16, 8);
+  lv_obj_set_size(entry, 244, 64);
+  lv_obj_set_style_radius(entry, 10, 0);
+  lv_obj_set_style_bg_color(entry, lv_color_hex(0x243B51), LV_STATE_PRESSED);
+  lv_obj_set_style_bg_opa(entry, LV_OPA_40, LV_STATE_PRESSED);
+  lv_obj_clear_flag(entry, LV_OBJ_FLAG_SCROLLABLE | LV_OBJ_FLAG_PRESS_LOCK);
+  lv_obj_add_flag(entry, LV_OBJ_FLAG_EVENT_BUBBLE);
+  lv_obj_add_event_cb(entry, evSettings, LV_EVENT_ALL, NULL);
+  lv_obj_t *title = lv_label_create(entry);
+  lv_label_set_text(title, PANEL_ID == 1 ? "ימש" : "אריע");
+  lv_obj_set_style_text_font(title, &font_hebrew_28, 0);
+  lv_obj_set_style_text_color(title, lv_color_white(), 0);
+  lv_obj_set_pos(title, 8, 12);
+  lv_obj_clear_flag(title, LV_OBJ_FLAG_CLICKABLE);
+  return entry;
+}
+
+// Physical left/right identity is identical on both panels. No relay command is invented.
+static void wallLampSet(unsigned side, bool on) {
+  wallLampOn[side]=on;
+  if(wallLampImg[side]) {
+    lv_img_set_src(wallLampImg[side],side==0 ? (on?&home_wall_left_on:&home_wall_left_off) : (on?&home_wall_right_on:&home_wall_right_off));
+    repaintOwner(wallLampImg[side]);
+  }
+  if(wallLampSwitch[side]) {
+    if(on) lv_obj_add_state(wallLampSwitch[side],LV_STATE_CHECKED);
+    else lv_obj_clear_state(wallLampSwitch[side],LV_STATE_CHECKED);
+    toggleFace(wallLampSwitch[side]);
+  }
+}
+static void evWallLampPower(lv_event_t *e) {
+  unsigned side=(uintptr_t)lv_event_get_user_data(e);
+  wallLampSet(side,lv_obj_has_state(lv_event_get_target(e),LV_STATE_CHECKED));
+}
+static void wallLampOpen(unsigned side) {
+  if(!wallLampScreen[side]) {
+    lv_obj_t *scr=wallLampScreen[side]=lv_obj_create(nullptr);
+    navBack(scr,side==0?"Left wall lamp":"Right wall lamp");
+    lv_obj_t *note=setBigLabel(scr,"Local preview - lamp control not connected");
+    lv_obj_align(note,LV_ALIGN_CENTER,0,-85);
+    lv_obj_t *sw=wallLampSwitch[side]=makeToggle(scr,nullptr,wallLampOn[side]);
+    lv_obj_add_event_cb(sw,evWallLampPower,LV_EVENT_VALUE_CHANGED,(void*)(uintptr_t)side);
+    lv_obj_align(sw,LV_ALIGN_CENTER,0,35);
+  }
+  lv_scr_load(wallLampScreen[side]);
+}
+static void evWallLamp(lv_event_t *e) {
+  HomeAction action=homeNavigationReady(e);
+  unsigned side=(uintptr_t)lv_event_get_user_data(e);
+  if(action==HOME_TOGGLE) wallLampSet(side,!wallLampOn[side]);
+  else if(action==HOME_OPEN) wallLampOpen(side);
+}
 
 static void buildHome() {
   scrHome = lv_obj_create(NULL);
@@ -5006,12 +6077,9 @@ static void buildHome() {
   // Clicked waits for the release, and feedback on release is not
   // feedback.
   lv_obj_add_event_cb(scrHome, evAnyPress, LV_EVENT_PRESSED, NULL);
+  lv_obj_add_event_cb(scrHome, evScreenAccessibility, LV_EVENT_SCREEN_LOADED, NULL);
 
-  lv_obj_t *title = lv_label_create(scrHome);
-  lv_label_set_text(title, PANEL_ID == 1 ? "ימש" : "אריע");
-  lv_obj_set_style_text_font(title, &font_hebrew_28, 0);
-  lv_obj_set_style_text_color(title, lv_color_white(), 0);
-  lv_obj_align(title, LV_ALIGN_TOP_LEFT, 24, 20);
+  buildHomeSettingsEntry(scrHome);
 
   lv_obj_t *tn = lv_label_create(scrHome);
   lv_label_set_text_fmt(tn, "TEST %03d", TEST_NUMBER);
@@ -5019,83 +6087,68 @@ static void buildHome() {
   lv_obj_set_style_text_color(tn, lv_color_hex(0x556070), 0);
   lv_obj_align(tn, LV_ALIGN_TOP_MID, 0, 24);
 
-  // The band between the title row and the tiles was empty. The
-  // tiles start at y=108 and nothing else lives up here, so the
-  // readings cost no layout at all.
-  lblClock = lv_label_create(scrHome);
-  lv_label_set_text(lblClock, "--:--:--");
-  lv_obj_set_style_text_font(lblClock, &lv_font_montserrat_26, 0);
-  lv_obj_set_style_text_color(lblClock, lv_color_white(), 0);
-  lv_obj_align(lblClock, LV_ALIGN_TOP_MID, 0, 54);
+  // Time and temperature appear once, in the persistent top-right readout.
 
-  lblClimate = lv_label_create(scrHome);
-  lv_label_set_text(lblClimate, "waiting for the sensors");
-  lv_obj_set_style_text_font(lblClimate, &lv_font_montserrat_16, 0);
-  lv_obj_set_style_text_color(lblClimate, lv_color_hex(0x8A94A0), 0);
-  lv_obj_align(lblClimate, LV_ALIGN_TOP_RIGHT, -24, 58);
+  // Approved arrangement 12: four columns, three rows, two tall tiles.
+  tileCount=0;
+  lv_obj_t *t=makeTile(0,0,TILE_BG_OFF);
+  lv_obj_set_height(t,TILE_H*2+TILE_GAPY);
+  tileBedImg=addImg(t,&home_bed_off);
+  tiles[tileCount++]={t,tileBedImg,&bedRunning};
+  lv_obj_add_event_cb(t,evBed,LV_EVENT_ALL,nullptr);
 
-  // --- row 0: bed, radio, air conditioner, fan ---
-  lv_obj_t *t;
+  t=makeTile(1,0,TILE_BG_OFF);
+  tileRadioImg=addImg(t,&img_radio_off);
+  lv_img_set_zoom(tileRadioImg,200); // fit the original 200px radio into the shorter tile
+  buildRadioBars(t,0);
+  radioPowerDot=lv_obj_create(t); lv_obj_remove_style_all(radioPowerDot);
+  lv_obj_set_size(radioPowerDot,14,14);lv_obj_align(radioPowerDot,LV_ALIGN_TOP_RIGHT,-14,12);
+  lv_obj_set_style_radius(radioPowerDot,LV_RADIUS_CIRCLE,0);
+  lv_obj_set_style_bg_opa(radioPowerDot,LV_OPA_COVER,0);
+  lv_obj_set_style_bg_color(radioPowerDot,lv_color_hex(0x243429),0);
+  lv_obj_clear_flag(radioPowerDot,LV_OBJ_FLAG_CLICKABLE|LV_OBJ_FLAG_SCROLLABLE);
+  tiles[tileCount++]={t,tileRadioImg,&radioOn};
+  badgeHome=makeTimerBadge(t);lv_obj_align(badgeHome,LV_ALIGN_TOP_LEFT,8,8);
+  lv_obj_add_event_cb(t,evRadio,LV_EVENT_ALL,nullptr);
 
-  t = makeTile(0, 0, TILE_BG_OFF);
-  tileBedImg = addImg(t, &img_bed_off);
-  tiles[tileCount++] = { t, tileBedImg, &bedRunning };
-  lv_obj_add_event_cb(t, evBed, LV_EVENT_CLICKED, NULL);
+  t=makeTile(2,0,TILE_BG_OFF);
+  tileACImg=addImg(t,&home_ac_off);
+  tiles[tileCount++]={t,tileACImg,&acPower};lv_obj_add_event_cb(t,evACRelease,LV_EVENT_ALL,nullptr);
 
-  t = makeTile(1, 0, TILE_BG_OFF);
-  tileRadioImg = addImg(t, &img_radio_off);
-  tiles[tileCount++] = { t, tileRadioImg, &radioOn };
-  // The same badge on the tile, so "am I on a timer" is answered
-  // without opening the radio screen at all.
-  badgeHome = makeTimerBadge(t);
-  lv_obj_align(badgeHome, LV_ALIGN_BOTTOM_MID, 0, -8);
-  lv_obj_add_event_cb(t, evRadio, LV_EVENT_CLICKED, NULL);
+  t=makeTile(3,0,TILE_BG_OFF);lv_obj_set_height(t,TILE_H*2+TILE_GAPY);
+  lv_obj_t *dreamPicture=addImg(t,&img_dream);
+  lv_obj_set_style_img_recolor_opa(dreamPicture,LV_OPA_TRANSP,0);
+  lv_obj_clear_flag(dreamPicture,LV_OBJ_FLAG_CLICKABLE);
+  dreamBuildHomeDot(t);
+  lv_obj_add_event_cb(t,evDreams,LV_EVENT_ALL,nullptr);
 
-  t = makeTile(2, 0, TILE_BG_OFF);
-  tileACImg = addImg(t, &img_ac_off);
-  tiles[tileCount++] = { t, tileACImg, &acPower };
-  lv_obj_add_event_cb(t, evTilePress,  LV_EVENT_PRESSED,    NULL);
-  lv_obj_add_event_cb(t, evACRelease,  LV_EVENT_RELEASED,   NULL);
-  lv_obj_add_event_cb(t, evTileLost,   LV_EVENT_PRESS_LOST, NULL);
+  t=makeTile(1,1,TILE_BG_OFF);tileFanImg=addImg(t,&home_fan_off);lv_img_set_zoom(tileFanImg,333); // +30%; source margin keeps blades inside tile
+  tiles[tileCount++]={t,tileFanImg,&fanOn};lv_obj_add_event_cb(t,evFanRelease,LV_EVENT_ALL,nullptr);
 
-  t = makeTile(3, 0, TILE_BG_OFF);
-  tileFanImg = addImg(t, &img_fan);
-  tiles[tileCount++] = { t, tileFanImg, &fanOn };
-  lv_obj_add_event_cb(t, evTilePress,  LV_EVENT_PRESSED,    NULL);
-  lv_obj_add_event_cb(t, evFanRelease, LV_EVENT_RELEASED,   NULL);
-  lv_obj_add_event_cb(t, evTileLost,   LV_EVENT_PRESS_LOST, NULL);
+  t=makeTile(2,1,TILE_BG_OFF);tileShadeImg=addImg(t,&img_shade_open);lv_img_set_zoom(tileShadeImg,190);
+  tiles[tileCount++]={t,tileShadeImg,&shadeOpen};lv_obj_add_event_cb(t,evShade,LV_EVENT_ALL,nullptr);
 
-  // --- row 1: lamp, shutters, settings, spare ---
-  t = makeTile(0, 1, TILE_BG_OFF);
-  tileLampImg = addImg(t, &img_lamp);
-  lv_obj_set_style_img_recolor(tileLampImg, lv_color_hex(0x9098A0), 0);
-  tiles[tileCount++] = { t, tileLampImg, &lampOn };
-  lv_obj_add_event_cb(t, evLamp, LV_EVENT_CLICKED, NULL);
+  for(unsigned side=0;side<2;++side) {
+    t=makeTile(side==0?0:2,2,TILE_BG_OFF);
+    wallLampImg[side]=addImg(t,side==0?&home_wall_left_off:&home_wall_right_off);
+    tiles[tileCount++]={t,wallLampImg[side],&wallLampOn[side]};
+    lv_obj_add_event_cb(t,evWallLamp,LV_EVENT_ALL,(void*)(uintptr_t)side);
+  }
+  t=makeTile(1,2,TILE_BG_OFF);tileLampImg=addImg(t,&img_lamp);
+  lv_img_set_zoom(tileLampImg,240); // full lamp fits the short row; larger than wall lamps, deeply dimmed when OFF
+  tiles[tileCount++]={t,tileLampImg,&lampOn};lv_obj_add_event_cb(t,evLamp,LV_EVENT_ALL,nullptr);
 
-  t = makeTile(1, 1, TILE_BG_OFF);
-  tileShadeImg = addImg(t, &img_shade_open);
-  tiles[tileCount++] = { t, tileShadeImg, &shadeOpen };
-  lv_obj_add_event_cb(t, evShade, LV_EVENT_CLICKED, NULL);
+  t=makeTile(3,2,TILE_BG_OFF);buildAlarmIcon(t);
+  lv_obj_add_event_cb(t,evSpare,LV_EVENT_ALL,nullptr);
 
-  t = makeTile(2, 1, 0x232A33);
-  addSymbol(t, LV_SYMBOL_SETTINGS, 0x8A94A0);
-  lv_obj_add_event_cb(t, evSettings, LV_EVENT_CLICKED, NULL);
-
-  t = makeTile(3, 1, TILE_BG_OFF);
-  buildAlarmIcon(t);
-  lv_obj_add_event_cb(t, evSpare, LV_EVENT_CLICKED, NULL);
-
-  // Status line under the grid. Nothing is wired to the bus, so
-  // every tile says what it WOULD do rather than pretending.
-  lblStatus = lv_label_create(scrHome);
-  lv_label_set_text(lblStatus, "nothing is wired to the bus yet");
-  lv_obj_set_style_text_font(lblStatus, &lv_font_montserrat_16, 0);
-  lv_obj_set_style_text_color(lblStatus, lv_color_hex(0x707C88), 0);
-  lv_obj_align(lblStatus, LV_ALIGN_BOTTOM_MID, 0, -22);
+  // Keep serial status storage without adding captions below the full-height grid.
+  lblStatus=lv_label_create(scrHome);lv_label_set_text(lblStatus,"");
+  lv_obj_add_flag(lblStatus,LV_OBJ_FLAG_HIDDEN);
 
   // Presence line. Blue while both required addresses answer, red
   // the moment one of them stops - that is a bus fault, and it
   // should be visible from across the room without a serial cable.
+  persistentStatusBuild();
   repaintAll();
   lv_scr_load(scrHome);
 
@@ -5110,6 +6163,15 @@ static void buildHome() {
 
 void setup() {
   Serial.begin(115200);
+  catalogClientInit();
+  ambientClientInit();
+  bedCommandQueue = xQueueCreate(32, sizeof(BedRequest));
+  acCommandQueue = xQueueCreate(16, sizeof(AcRequest));
+  alarmAudioQueue = xQueueCreate(16, sizeof(AudioRequest));
+  audioReplyQueue = xQueueCreate(1, sizeof(AudioReply));
+  dreamRequestQueue = xQueueCreate(6, sizeof(DreamRequest));
+  dreamReplyQueue = xQueueCreate(1, sizeof(DreamReply));
+  if (!alarmAudioQueue) Serial.println("[ALARM AUDIO] queue allocation FAILED");
   RS485.begin(RS485_BAUD, SERIAL_8N1, RS485_RX_PIN, RS485_TX_PIN);
   delay(100);
   while (RS485.available()) RS485.read();
@@ -5121,7 +6183,7 @@ void setup() {
   delay(500);
 
   Serial.println();
-  Serial.println("=== PANEL IRA - TEST 089 - MATCHED PAIR + SEIKO NIGHT SCREENSAVER ===");
+  Serial.println("=== PANEL IRA - TEST 119 - DREAM WAIT ANIMATION ===");
   Serial.printf("psram: %lu free of %lu\n",
                 (unsigned long)ESP.getFreePsram(),
                 (unsigned long)ESP.getPsramSize());
@@ -5196,7 +6258,7 @@ void setup() {
   lastTouchMs = millis();      // do not count the boot photo as idle time
 
   Serial.println();
-  Serial.println("Eight tiles, 200 px each, native size - no scaling.");
+  Serial.println("Ten selected Home tiles: two tall, separate wall lamps; 1024x600.");
   Serial.println("Every press prints here and on the status line.");
   Serial.println("Judge the spacing and the margins, not the behaviour.");
   Serial.println();
@@ -5269,6 +6331,20 @@ static void autoBrightTick() {
 // where they belong.
 static void fastTick(lv_timer_t *t) {
   (void)t;
+  applyAudioReply();
+  dreamUiTick();
+  ambientUiTick();
+  static CatalogClientReply catalogReply;
+  if (catalogReplyQueue && xQueueReceive(catalogReplyQueue, &catalogReply, 0) == pdTRUE) {
+    // Route by request owner, including replies received after navigation.
+    if (!radioSettingsOnReply(catalogReply.json))
+      radioBrowserOnReply(catalogReply.json);
+  }
+  radioSettingsTick();
+  radioBrowserTick();
+  radioAnimationTick();
+  deviceAnimationTick();
+  accessibilityTick();
   luxRead();
   autoBrightTick();
 }
@@ -5297,6 +6373,11 @@ static void printHelp() {
   Serial.println("  h<ms>  haptic pulse length, fires a test tick");
   Serial.println("  T<...> set the clock:  T2026-09-03 13:45:00");
   Serial.println("  s      full sweep 0x08..0x77");
+  Serial.println("  ap     AudioNode: play proven radio, volume 11, fade 1.5 s");
+  Serial.println("  as     AudioNode: stop audio");
+  Serial.println("  bedtest  send safe OFF to Ira BedBox and verify A5 reply");
+  Serial.println("  motortest  run ALL IRA motors at 35% for 3 seconds");
+  Serial.println("  motor N V  set individual IRA motor 1..7 to 0..100%%");
   Serial.println("  ?      this help");
   Serial.printf("  now: on %u, off %u, backlight %u %%\n",
                 dimOn, dimOff, backlight);
@@ -5306,10 +6387,53 @@ static void printHelp() {
 }
 
 void loop() {
+  BedRequest bed;
+  if (bedCommandQueue && xQueueReceive(bedCommandQueue, &bed, 0) == pdTRUE) {
+    TimeFrame f{};
+    f.start = FRAME_START;
+    f.src = PANEL_ID;
+    f.dst = NODE_BEDBOX_IRA;
+    f.type = TYPE_BED_CMD;
+    const uint16_t s = (uint16_t)esp_random();
+    f.seqLo = uint8_t(s); f.seqHi = uint8_t(s >> 8);
+    f.yearLo = bed.bytes[1];
+    f.yearHi = bed.bytes[2];
+    f.month = bed.bytes[3];
+    f.crc = rsFrameCrc(f);
+    rsSendFrame(f);
+    Serial.printf("[BED A5 TX] cmd=%u target=%u value=%u seq=%u\n",
+                  bed.bytes[1], bed.bytes[2], bed.bytes[3], s);
+    rs485WaitForBedboxReply(s, 350);
+  }
+  AcRequest ac;
+  if (acCommandQueue && xQueueReceive(acCommandQueue, &ac, 0) == pdTRUE) {
+    TimeFrame f{};
+    f.start = FRAME_START;
+    f.src = PANEL_ID;
+    f.dst = NODE_BEDBOX_IRA;
+    f.type = TYPE_AC_CMD;
+    const uint16_t s = (uint16_t)esp_random();
+    f.seqLo = uint8_t(s); f.seqHi = uint8_t(s >> 8);
+    f.yearLo = ac.command;
+    f.month = ac.value;
+    f.crc = rsFrameCrc(f);
+    rsSendFrame(f);
+    Serial.printf("[AC IR TX] cmd=%u value=%u seq=%u\n", ac.command, ac.value, s);
+    rs485WaitForAcReply(s, 500);
+  }
 #if PANEL_ID == 1
   rs485ClockSendTick();
+  rs485FeedbackPoll();        // TEST067: BedBox -> panel zone levels
 #else
   rs485ClockPoll();
+#endif
+#if PANEL_ID == 1
+  static uint32_t lastAudioSlot = 0;
+  if (millis() - lastAudioSlot >= 250UL) {
+    servicePanelAudio();
+    grantIraAudio();
+    lastAudioSlot = millis();
+  }
 #endif
   static String line = "";
 
@@ -5355,6 +6479,25 @@ void loop() {
           Serial.printf("  haptic length %u ms\n", hapLenMs);
           cfgTouched();
           hapticPulse();
+        } else if (line == "bedtest") {
+          rs485BedboxSafeOffTest();
+        } else if (line == "motortest") {
+          rs485BedboxMotorTest();
+        } else if (line.startsWith("motor ")) {
+          int motor = 0;
+          int level = 0;
+          if (sscanf(line.c_str(), "motor %d %d", &motor, &level) == 2 &&
+              motor >= 1 && motor <= 7 && level >= 0 && level <= 100) {
+            sendBedCommand(BED_CMD_MOTOR, (uint8_t)(motor - 1), (uint8_t)level);
+          } else {
+            Serial.println("  format: motor N V");
+          }
+        } else if (line == "ap" || line == "as") {
+          if (lvgl_port_lock(-1)) {
+            radioBrowserCancelSelection();
+            queueRadioAudio(line == "as" ? 2 : 5, 0, 0);
+            lvgl_port_unlock();
+          }
         } else if (line == "m") {
           lvMem("request");
         } else if (line == "i") {
@@ -5395,7 +6538,7 @@ void loop() {
           }
           else Serial.println("  backlight is 0..100");
         } else {
-          Serial.println("  n<v>, f<v>, b<v>, v<pct>, h<ms>, i, s, m, T<time> or ?");
+          Serial.println("  ap, as, bedtest, motortest, motor N V, n<v>, f<v>, b<v>, v<pct>, h<ms>, i, s, m, T<time> or ?");
         }
         line = "";
       }
@@ -5408,5 +6551,5 @@ void loop() {
 }
 
 // ============================================================
-// END PANEL IRA - TEST 083 - 7B FULL UI + RS485 REMOTE CLOCK
+// END PANEL IRA - TEST 119 - DREAM WAIT ANIMATION
 // ============================================================
